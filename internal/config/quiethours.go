@@ -84,10 +84,10 @@ func parseTimeString(s string) int {
 		return h*60 + m
 	}
 
-	// 24h format: "HH:MM"
-	if len(s) == 5 && s[2] == ':' {
-		h := parseDigits(s[:2])
-		m := parseDigits(s[3:])
+	// 24h format: "HH:MM" or "H:MM"
+	if idx := strings.IndexByte(s, ':'); idx >= 1 && idx <= 2 && len(s) >= 4 && len(s) <= 5 {
+		h := parseDigits(s[:idx])
+		m := parseDigits(s[idx+1:])
 		if h < 0 || h > 23 || m < 0 || m > 59 {
 			return -1
 		}

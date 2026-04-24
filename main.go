@@ -119,10 +119,10 @@ func main() {
 	if *dryRun {
 		sched.RunOnce(ctx)
 		sched.Stop()
+		log.Info("Dry-run completed")
 		if err := logger.Close(); err != nil {
 			fmt.Printf("Warning: Failed to close logger: %v\n", err)
 		}
-		log.Info("Dry-run completed")
 		os.Exit(0)
 	}
 
@@ -149,12 +149,12 @@ func main() {
 	// Stop scheduler
 	sched.Stop()
 
-	// Close logger to flush and release log file
+	log.Info("Bot stopped successfully")
+
+	// Close logger to flush and release log file (must be last)
 	if err := logger.Close(); err != nil {
 		fmt.Printf("Warning: Failed to close logger: %v\n", err)
 	}
-
-	log.Info("Bot stopped successfully")
 }
 
 // resolveDataDir determines the final DataDir value using the priority:
@@ -166,6 +166,9 @@ func resolveDataDir(flagVal, configVal string) (string, error) {
 	}
 	if envDir := os.Getenv("DATA_DIR"); envDir != "" {
 		return filepath.Abs(envDir)
+	}
+	if configVal != "" {
+		return filepath.Abs(configVal)
 	}
 	return configVal, nil
 }

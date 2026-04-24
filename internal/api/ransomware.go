@@ -78,19 +78,6 @@ type RansomwareResponse struct {
 	Victims []RansomwareEntry `json:"victims"`
 }
 
-// StatusTracker interface for API deduplication with two-phase tracking
-//
-// Two-Phase Processing Explained:
-// Phase 1 (Fetch): IsAPIItemFetched/MarkAPIItemFetched
-//   - Prevents duplicate API calls for same data
-//   - Stores complete entry data for recovery
-//
-// Phase 2 (Send): IsAPIItemSentToWebhook/MarkAPIItemSent
-//   - Tracks Discord delivery status
-//   - Enables retry of failed deliveries
-//
-// This separation ensures data integrity even if Discord is unavailable.
-
 // GetLatestEntries fetches the latest ransomware entries from the API
 //
 // Returns all entries from the API. Deduplication is handled by the caller
@@ -131,19 +118,7 @@ func GenerateEntryKey(entry RansomwareEntry) string {
 		return "id:" + entry.ID
 	}
 
-	// Use a stable combination that won't change
-	// Group + Victim should be unique enough for ransomware incidents
-	baseKey := entry.Group + ":" + entry.Victim
-
-	// Add country if available for additional uniqueness
-	if entry.Country != "" {
-		baseKey += ":" + entry.Country
-	}
-
-	// Only add attack date if available (more stable than discovered time)
-	if entry.AttackDate != "" {
-		baseKey += ":" + entry.AttackDate
-	}
-
-	return baseKey
+	// Use a stable combination with unambiguous separator and all fields always present
+	// to avoid key collisions from field values containing the separator
+	return entry.Group + "|" + entry.Victim + "|" + entry.Country + "|" + entry.AttackDate
 }

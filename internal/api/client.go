@@ -14,8 +14,10 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -114,7 +116,7 @@ func NewClient(apiKey string) (*Client, error) {
 //
 // Retry behavior:
 // - Retries on rate-limit (429), server errors (5xx), and network errors
-// - Exponential backoff between retries
+// - Linear backoff between retries
 // - Respects context cancellation
 //
 // Authentication:
@@ -199,12 +201,14 @@ func (c *Client) makeRequest(ctx context.Context, url string, target interface{}
 
 		// Success - decode response
 		// Limit response body size to prevent memory exhaustion attacks
-		resp.Body = http.MaxBytesReader(nil, resp.Body, 10<<20) // 10MB limit
+		limitedBody := io.LimitReader(resp.Body, 10<<20) // 10MB limit
 
-		if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+		if err := json.NewDecoder(limitedBody).Decode(target); err != nil {
 			_ = resp.Body.Close()
 			return fmt.Errorf("failed to decode response: %w", err)
 		}
+		// Drain remaining body to allow HTTP connection reuse
+		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 
 		return nil
@@ -218,13 +222,18 @@ func isRetryableNetworkError(err error) bool {
 	if err == nil {
 		return false
 	}
-	errStr := strings.ToLower(err.Error())
 
-	return strings.Contains(errStr, "timeout") ||
-		strings.Contains(errStr, "connection") ||
-		strings.Contains(errStr, "temporary") ||
-		strings.Contains(errStr, "unavailable") ||
-		strings.Contains(errStr, "reset")
+	// Check for typed net.Error (timeout, temporary)
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout()
+	}
+
+	// Fallback: string matching for errors not wrapped as net.Error
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "connection") ||
+		strings.Contains(errStr, "reset") ||
+		strings.Contains(errStr, "unavailable")
 }
 
 // isRetryableStatusCode checks if an HTTP status code is worth retrying

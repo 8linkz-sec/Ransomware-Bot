@@ -54,7 +54,7 @@ func GetCountryFlag(isoCode string) string {
 // generateFlagEmoji converts ISO-2 country code to Unicode flag emoji
 // Each flag is composed of two Regional Indicator Symbol letters
 func generateFlagEmoji(code string) string {
-	if len(code) != 2 {
+	if len(code) != 2 || code[0] < 'A' || code[0] > 'Z' || code[1] < 'A' || code[1] > 'Z' {
 		return "🌐"
 	}
 

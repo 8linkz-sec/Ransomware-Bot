@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,7 +152,10 @@ func (w *WebhookSender) executeWebhook(ctx context.Context, webhookURL string, p
 		}
 
 		// Read response body
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			log.WithError(readErr).Warn("Failed to read Slack webhook response body")
+		}
 		_ = resp.Body.Close()
 
 		lastStatusCode = resp.StatusCode
@@ -167,6 +171,27 @@ func (w *WebhookSender) executeWebhook(ctx context.Context, webhookURL string, p
 		lastErr = fmt.Errorf("slack webhook returned status %d: %s", resp.StatusCode, bodyStr)
 
 		if isRetryableStatusCode(resp.StatusCode) {
+			// Honor Retry-After header for 429 responses
+			if resp.StatusCode == http.StatusTooManyRequests {
+				if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+					if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
+						delay := time.Duration(seconds) * time.Second
+						if delay > 60*time.Second {
+							delay = 60 * time.Second // cap at 60s
+						}
+						log.WithFields(log.Fields{
+							"retry_after": seconds,
+							"attempt":     attempt + 1,
+						}).Warn("Slack rate limited, waiting Retry-After duration")
+						select {
+						case <-ctx.Done():
+							return ctx.Err()
+						case <-time.After(delay):
+						}
+						continue
+					}
+				}
+			}
 			log.WithFields(log.Fields{
 				"status_code": resp.StatusCode,
 				"attempt":     attempt + 1,

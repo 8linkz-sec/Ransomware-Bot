@@ -18,10 +18,11 @@ func DefangURL(url string) string {
 	if url == "" {
 		return url
 	}
-	if strings.HasPrefix(url, "https://") {
+	lower := strings.ToLower(url)
+	if strings.HasPrefix(lower, "https://") {
 		return "hxxps://" + url[8:]
 	}
-	if strings.HasPrefix(url, "http://") {
+	if strings.HasPrefix(lower, "http://") {
 		return "hxxp://" + url[7:]
 	}
 	return url
@@ -53,8 +54,14 @@ func StripHTML(input string) string {
 // TruncateText truncates text to a maximum number of runes (Unicode-safe).
 // If the text exceeds maxLength runes, it is truncated with "..." appended.
 func TruncateText(text string, maxLength int) string {
+	if maxLength <= 0 {
+		return ""
+	}
 	if utf8.RuneCountInString(text) <= maxLength {
 		return text
+	}
+	if maxLength <= 3 {
+		return string([]rune(text)[:maxLength])
 	}
 	return string([]rune(text)[:maxLength-3]) + "..."
 }

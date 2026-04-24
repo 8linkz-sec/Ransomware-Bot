@@ -11,6 +11,7 @@ package filter
 import (
 	"regexp"
 	"strings"
+	"sync"
 
 	"Ransomware-Bot/internal/api"
 	"Ransomware-Bot/internal/config"
@@ -18,6 +19,9 @@ import (
 
 	log "github.com/sirupsen/logrus"
 )
+
+// regexCache caches compiled regex patterns to avoid recompilation on every match
+var regexCache sync.Map
 
 // MatchesAPIEntry returns true if the API entry passes the webhook's filter rules.
 // Returns true when filters is nil (no filtering configured).
@@ -129,9 +133,11 @@ func matchesKeywords(include, exclude []string, text, mode string) bool {
 }
 
 // keywordMatch checks if a single keyword matches the text.
+// Note: literal mode is case-insensitive; regex mode is case-sensitive by default
+// (use (?i) prefix in regex patterns for case-insensitive matching).
 func keywordMatch(keyword, text, lowerText string, useRegex bool) bool {
 	if useRegex {
-		re, err := regexp.Compile(keyword)
+		re, err := getCompiledRegex(keyword)
 		if err != nil {
 			log.WithFields(log.Fields{
 				"pattern": keyword,
@@ -143,6 +149,21 @@ func keywordMatch(keyword, text, lowerText string, useRegex bool) bool {
 	}
 	// Literal: case-insensitive substring match
 	return strings.Contains(lowerText, strings.ToLower(keyword))
+}
+
+// getCompiledRegex returns a cached compiled regex, compiling and caching on first use.
+func getCompiledRegex(pattern string) (*regexp.Regexp, error) {
+	if cached, ok := regexCache.Load(pattern); ok {
+		if re, ok := cached.(*regexp.Regexp); ok {
+			return re, nil
+		}
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	regexCache.Store(pattern, re)
+	return re, nil
 }
 
 // matchesCategories checks entry categories against include/exclude category lists.

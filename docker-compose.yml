@@ -13,8 +13,11 @@ services:
     environment:
       - TZ=UTC
 
-    mem_limit: 512m
-    cpus: 1.0
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
 
     logging:
       driver: "json-file"
