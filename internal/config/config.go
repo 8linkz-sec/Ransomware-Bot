@@ -195,15 +195,26 @@ func loadFeedsConfig(cfg *Config, configDir string) error {
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		// Feeds config is optional, log warning and continue
-		// This allows the bot to start with API-only mode
-		// or with default feed configurations
-		log.WithField("path", configPath).Warn("Feeds config file not found, using defaults")
-		return nil
+		if os.IsNotExist(err) {
+			log.WithField("path", configPath).Warn("Feeds config file not found, using defaults")
+			return nil
+		}
+		return fmt.Errorf("failed to read feeds config file %s: %w", configPath, err)
 	}
 
 	if err := json.Unmarshal(data, &cfg.Feeds); err != nil {
 		return fmt.Errorf("failed to parse feeds config file %s: %w", configPath, err)
+	}
+
+	// Ensure nil slices from JSON are replaced with empty slices
+	if cfg.Feeds.RansomwareFeeds == nil {
+		cfg.Feeds.RansomwareFeeds = []string{}
+	}
+	if cfg.Feeds.GovernmentFeeds == nil {
+		cfg.Feeds.GovernmentFeeds = []string{}
+	}
+	if cfg.Feeds.GeneralFeeds == nil {
+		cfg.Feeds.GeneralFeeds = []string{}
 	}
 
 	// Validate RSS feed URLs
@@ -220,14 +231,19 @@ func loadFormatConfig(cfg *Config, configDir string) error {
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		// Format config is optional, log warning and continue
-		log.WithField("path", configPath).Warn("Format config file not found, using defaults")
-		return nil
+		if os.IsNotExist(err) {
+			log.WithField("path", configPath).Warn("Format config file not found, using defaults")
+			return nil
+		}
+		return fmt.Errorf("failed to read format config file %s: %w", configPath, err)
 	}
 
-	if err := json.Unmarshal(data, &cfg.Format); err != nil {
+	// Preserve defaults: unmarshal into a copy, then merge non-zero fields
+	formatOverrides := cfg.Format
+	if err := json.Unmarshal(data, &formatOverrides); err != nil {
 		return fmt.Errorf("failed to parse format config file %s: %w", configPath, err)
 	}
+	cfg.Format = formatOverrides
 
 	return nil
 }
@@ -281,8 +297,12 @@ func validateConfig(cfg *Config) error {
 	// Validate API key if any webhook is enabled
 	hasEnabledDiscordWebhook := cfg.DiscordWebhooks.Ransomware.Enabled || cfg.DiscordWebhooks.RSS.Enabled || cfg.DiscordWebhooks.Government.Enabled
 	hasEnabledSlackWebhook := cfg.SlackWebhooks.Ransomware.Enabled || cfg.SlackWebhooks.RSS.Enabled || cfg.SlackWebhooks.Government.Enabled
-	if (hasEnabledDiscordWebhook || hasEnabledSlackWebhook) && cfg.APIKey == "" {
-		log.Warn("API key is empty but webhooks are enabled")
+	if hasEnabledDiscordWebhook || hasEnabledSlackWebhook {
+		if cfg.APIKey == "" {
+			log.Warn("API key is empty but webhooks are enabled")
+		} else if strings.Contains(strings.ToUpper(cfg.APIKey), "YOUR") || strings.Contains(strings.ToUpper(cfg.APIKey), "HERE") {
+			log.Warn("API key appears to be a placeholder value - please set a real API key")
+		}
 	}
 
 	// Validate Discord webhook URLs
@@ -370,6 +390,23 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("retry_window cannot be negative: %v", cfg.RetryWindow)
 	}
 
+	// Validate field_order entries against known field names
+	validFields := map[string]bool{
+		"country": true, "victim": true, "group": true, "activity": true,
+		"attackdate": true, "discovered": true, "post_url": true, "claim_url": true,
+		"website": true, "url": true, "description": true, "screenshot": true,
+	}
+	for _, field := range cfg.Format.FieldOrder {
+		if !validFields[strings.ToLower(field)] {
+			return fmt.Errorf("invalid field_order entry: %q (valid: country, victim, group, activity, attackdate, discovered, post_url, claim_url, website, url, description, screenshot)", field)
+		}
+	}
+	for _, field := range cfg.Format.Slack.FieldOrder {
+		if !validFields[strings.ToLower(field)] {
+			return fmt.Errorf("invalid slack field_order entry: %q (valid: country, victim, group, activity, attackdate, discovered, post_url, claim_url, website, url, description, screenshot)", field)
+		}
+	}
+
 	// Validate webhook filters
 	if err := validateWebhookFilters("discord.ransomware", cfg.DiscordWebhooks.Ransomware.Filters); err != nil {
 		return err
@@ -427,10 +464,10 @@ func validateWebhookFilters(name string, filters *WebhookFilters) error {
 		return fmt.Errorf("webhook %s: invalid keyword_match mode %q (must be \"literal\" or \"regex\")", name, filters.KeywordMatchMode)
 	}
 
-	// Validate country codes (must be 2 letters)
+	// Validate country codes (must be 2 uppercase ASCII letters)
 	for _, code := range append(filters.IncludeCountries, filters.ExcludeCountries...) {
-		if len(code) != 2 {
-			return fmt.Errorf("webhook %s: invalid country code %q (must be 2-letter ISO code)", name, code)
+		if len(code) != 2 || code[0] < 'A' || code[0] > 'Z' || code[1] < 'A' || code[1] > 'Z' {
+			return fmt.Errorf("webhook %s: invalid country code %q (must be 2 uppercase letters, e.g. \"US\")", name, code)
 		}
 	}
 
@@ -583,14 +620,29 @@ func validateTimeString(s string) (int, error) {
 // ConfigFileTimes returns the latest modification time across all config files.
 // Used by the config watcher to detect changes.
 func ConfigFileTimes(configDir string) (time.Time, error) {
-	files := []string{"config_general.json", "config_feeds.json", "config_format.json"}
+	requiredFiles := []string{"config_general.json"}
+	optionalFiles := []string{"config_feeds.json", "config_format.json"}
 	var latest time.Time
-	for _, f := range files {
+
+	// Required files must exist
+	for _, f := range requiredFiles {
+		path := filepath.Join(configDir, f)
+		info, err := os.Stat(path)
+		if err != nil {
+			return latest, fmt.Errorf("required config file %s: %w", f, err)
+		}
+		if info.ModTime().After(latest) {
+			latest = info.ModTime()
+		}
+	}
+
+	// Optional files are skipped if missing
+	for _, f := range optionalFiles {
 		path := filepath.Join(configDir, f)
 		info, err := os.Stat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
-				continue // optional files
+				continue
 			}
 			return latest, err
 		}

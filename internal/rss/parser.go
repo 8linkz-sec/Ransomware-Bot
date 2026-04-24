@@ -24,10 +24,6 @@ type Parser struct {
 
 // StatusTracker interface for deduplication
 type StatusTracker interface {
-	IsItemProcessed(feedURL, itemKey string) bool
-	MarkItemProcessed(feedURL, itemKey, itemTitle string)
-
-	// New RSS two-phase tracking methods
 	IsRSSItemParsed(feedURL, itemKey string) bool
 	MarkRSSItemParsed(feedURL, itemKey string, entry status.StoredRSSEntry)
 }
@@ -63,6 +59,12 @@ type workerPool struct {
 
 // NewParser creates a new RSS parser with retry configuration
 func NewParser(retryCount int, retryDelay, workerTimeout time.Duration, statusTracker StatusTracker) *Parser {
+	if retryCount < 0 {
+		retryCount = 0
+	}
+	if workerTimeout <= 0 {
+		workerTimeout = 30 * time.Second
+	}
 	return &Parser{
 		parser:        gofeed.NewParser(),
 		retryCount:    retryCount,
@@ -143,8 +145,8 @@ func (p *Parser) processFeedItems(feed *gofeed.Feed, feedURL string) []Entry {
 		// Generate unique key for this item
 		key := GenerateEntryKey(feedURL, safeString(item.GUID), safeString(item.Link), safeString(item.Title))
 
-		// Skip if we've already processed this item (using persistent storage)
-		if p.statusTracker != nil && p.statusTracker.IsItemProcessed(feedURL, key) {
+		// Skip if we've already parsed this item (using persistent storage)
+		if p.statusTracker != nil && p.statusTracker.IsRSSItemParsed(feedURL, key) {
 			continue
 		}
 
@@ -193,12 +195,12 @@ func GenerateContentSignature(feedURL, title string, published time.Time) string
 func GenerateEntryKey(feedURL, guid, link, title string) string {
 	// Prefer GUID if available (most stable)
 	if guid != "" {
-		return feedURL + ":" + guid
+		return feedURL + ":" + strings.TrimSpace(guid)
 	}
 
 	// Fallback to link if available (very stable)
 	if link != "" {
-		return feedURL + ":" + link
+		return feedURL + ":" + strings.TrimRight(strings.TrimSpace(link), "/")
 	}
 
 	// Last resort: use normalized title (lowercase, trimmed)
@@ -257,9 +259,9 @@ func getPublishedDate(item *gofeed.Item) time.Time {
 	return time.Time{}
 }
 
-// safeString returns empty string if input is nil or empty
+// safeString trims whitespace from RSS field values
 func safeString(s string) string {
-	return s // strings are safe by default in Go
+	return strings.TrimSpace(s)
 }
 
 // safeCategories safely extracts categories from RSS item
@@ -272,13 +274,18 @@ func safeCategories(categories []string) []string {
 
 // convertToStoredRSSEntry converts rss.Entry to status.StoredRSSEntry for persistence
 func convertToStoredRSSEntry(entry Entry, key string) status.StoredRSSEntry {
+	published := ""
+	if !entry.Published.IsZero() {
+		published = entry.Published.Format("2006-01-02 15:04:05.999999")
+	}
+
 	return status.StoredRSSEntry{
 		Key:         key,
 		FeedURL:     entry.FeedURL,
 		Title:       entry.Title,
 		Link:        entry.Link,
 		Description: entry.Description,
-		Published:   entry.Published.Format("2006-01-02 15:04:05.999999"),
+		Published:   published,
 		Author:      entry.Author,
 		Categories:  entry.Categories,
 		GUID:        entry.GUID,
@@ -311,13 +318,10 @@ func (wp *workerPool) worker(ctx context.Context) {
 			// Process the RSS feed
 			entries, err := wp.parser.ParseFeed(ctx, url)
 
-			// Send result back with timeout to prevent goroutine leak
+			// Send result back (channel is buffered; block until space or context cancel)
 			select {
 			case wp.results <- feedResult{url: url, entries: entries, err: err}:
 			case <-ctx.Done():
-				return
-			case <-time.After(5 * time.Second):
-				log.WithField("url", url).Warn("Worker timed out sending result, channel may be blocked")
 				return
 			}
 

@@ -50,7 +50,7 @@ const (
 // formatRansomwareEmbed creates a Discord embed for a ransomware entry
 func (w *WebhookSender) formatRansomwareEmbed(entry api.RansomwareEntry, formatConfig *config.FormatConfig) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{
-		Title:     fmt.Sprintf("🚨 Ransomware Alert: %s", entry.Group),
+		Title:     textutil.TruncateText(fmt.Sprintf("🚨 Ransomware Alert: %s", entry.Group), 256),
 		Color:     ColorRansomware,
 		Timestamp: entry.Discovered.Format(time.RFC3339),
 		Footer: &discordgo.MessageEmbedFooter{
@@ -165,7 +165,7 @@ func (w *WebhookSender) createRansomwareField(fieldName string, entry api.Ransom
 	case "post_url", "claim_url":
 		value := placeholder
 		if entry.ClaimURL != "" {
-			value = textutil.DefangURL(entry.ClaimURL)
+			value = textutil.TruncateText(textutil.DefangURL(entry.ClaimURL), 1024)
 		}
 		if value != placeholder || showEmpty {
 			return &discordgo.MessageEmbedField{
@@ -178,7 +178,7 @@ func (w *WebhookSender) createRansomwareField(fieldName string, entry api.Ransom
 	case "website", "url":
 		value := placeholder
 		if entry.URL != "" {
-			value = entry.URL
+			value = textutil.TruncateText(entry.URL, 1024)
 		}
 		if value != placeholder || showEmpty {
 			return &discordgo.MessageEmbedField{
@@ -204,7 +204,7 @@ func (w *WebhookSender) createRansomwareField(fieldName string, entry api.Ransom
 	case "screenshot":
 		value := placeholder
 		if entry.Screenshot != "" {
-			value = entry.Screenshot
+			value = textutil.TruncateText(entry.Screenshot, 1024)
 		}
 		if value != placeholder || showEmpty {
 			return &discordgo.MessageEmbedField{
@@ -221,7 +221,7 @@ func (w *WebhookSender) createRansomwareField(fieldName string, entry api.Ransom
 // formatRSSEmbed creates a Discord embed for an RSS entry
 func (w *WebhookSender) formatRSSEmbed(entry rss.Entry) *discordgo.MessageEmbed {
 	embed := &discordgo.MessageEmbed{
-		Title:       entry.Title,
+		Title:       textutil.TruncateText(entry.Title, 256),
 		Description: w.truncateDescription(entry.Description, 2048),
 		Color:       ColorRSS,
 		Timestamp:   entry.Published.Format(time.RFC3339),
@@ -264,14 +264,15 @@ func (w *WebhookSender) formatRSSEmbed(entry rss.Entry) *discordgo.MessageEmbed 
 	return embed
 }
 
-// truncateDescription truncates a description to fit Discord's limits
+// truncateDescription truncates a description to fit Discord's limits (Unicode-safe)
 func (w *WebhookSender) truncateDescription(description string, maxLength int) string {
-	if len(description) <= maxLength {
+	runes := []rune(description)
+	if len(runes) <= maxLength {
 		return description
 	}
 
 	// Find a good place to cut off (preferably at a sentence boundary)
-	truncated := description[:maxLength-3]
+	truncated := runes[:maxLength-3]
 
 	// Look for the last period, exclamation mark, or question mark
 	lastSentenceEnd := -1
@@ -284,10 +285,10 @@ func (w *WebhookSender) truncateDescription(description string, maxLength int) s
 
 	// If we found a sentence boundary and it's not too early, use it
 	if lastSentenceEnd > maxLength/2 {
-		return truncated[:lastSentenceEnd+1]
+		return string(truncated[:lastSentenceEnd+1])
 	}
 
 	// Otherwise, just truncate and add ellipsis
-	return truncated + "..."
+	return string(truncated) + "..."
 }
 

@@ -14,7 +14,8 @@ RUN go mod download && go mod verify
 COPY . .
 
 # Build with optimizations and security hardening
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
     -a \
     -ldflags='-w -s -extldflags "-static"' \
     -trimpath \
@@ -22,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     .
 
 # Runtime Stage
-FROM alpine:latest
+FROM alpine:3.22
 
 # Install runtime dependencies and security updates
 RUN apk update && \
@@ -48,21 +49,20 @@ RUN mkdir -p /app/logs /app/data /app/configs && \
     chmod 750 /app/logs /app/data && \
     chmod 755 /app/configs
 
-# Define volumes for persistence
-VOLUME ["/app/configs", "/app/logs", "/app/data"]
-
 # Switch to non-root user
 USER botuser
 
+# Define volumes for persistence (after USER to preserve ownership)
+VOLUME ["/app/configs", "/app/logs", "/app/data"]
+
 # Health check: verify the bot process is running
 # Note: With init: true in docker-compose.yml, PID 1 is the init process, not the bot
+# Uses /proc scan instead of pidof which is not available in Alpine by default
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
-  CMD pidof ransomware-bot || exit 1
+  CMD pgrep -x ransomware-bot > /dev/null || exit 1
 
 # Set environment variables
 ENV TZ=UTC \
-    CONFIG_DIR=/app/configs \
-    LOG_DIR=/app/logs \
     DATA_DIR=/app/data
 
 # Start the bot

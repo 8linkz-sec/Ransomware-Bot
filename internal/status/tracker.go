@@ -236,11 +236,7 @@ func (t *Tracker) UpdateFeedStatus(feedURL string, success bool, entriesFound in
 	// Store updated feed info
 	t.rssStatus.Feeds[feedURL] = feedInfo
 	t.rssStatus.LastUpdated = now
-
-	// Save RSS status to file
-	if err := t.saveRSSStatus(); err != nil {
-		log.WithError(err).Error("Failed to save RSS status to file")
-	}
+	t.rssDirty = true
 }
 
 // UpdateAPIStatus updates the status for the ransomware API
@@ -264,11 +260,7 @@ func (t *Tracker) UpdateAPIStatus(success bool, entriesFound int, errorMsg strin
 	}
 
 	t.apiStatus.LastUpdated = now
-
-	// Save API status to file
-	if err := t.saveAPIStatus(); err != nil {
-		log.WithError(err).Error("Failed to save API status to file")
-	}
+	t.apiDirty = true
 }
 
 // IsAPIItemSentToWebhook checks if an API item was already sent to a specific webhook
@@ -461,11 +453,29 @@ func (t *Tracker) sortRSSParsedItems() {
 		time time.Time
 	}
 
+	timeFormats := []string{
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+		time.RFC3339,
+		time.RFC1123Z,
+		time.RFC1123,
+		"Mon, 02 Jan 2006 15:04:05 -0700",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02",
+	}
+
 	items := make([]itemWithTime, len(t.rssStatus.ParsedItems))
 	for i, entry := range t.rssStatus.ParsedItems {
-		parsedTime, err := time.Parse("2006-01-02 15:04:05.999999", entry.Published)
-		if err != nil {
-			parsedTime, _ = time.Parse("2006-01-02 15:04:05", entry.Published)
+		var parsedTime time.Time
+		for _, format := range timeFormats {
+			if t, err := time.Parse(format, entry.Published); err == nil {
+				parsedTime = t
+				break
+			}
+		}
+		// If no format matched, fall back to ParsedAt which is always in a known format
+		if parsedTime.IsZero() && entry.ParsedAt != "" {
+			parsedTime, _ = time.Parse("2006-01-02 15:04:05.999999", entry.ParsedAt)
 		}
 		items[i] = itemWithTime{entry, parsedTime}
 	}

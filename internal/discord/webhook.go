@@ -211,12 +211,17 @@ func parseWebhookURL(webhookURL string) (string, string, error) {
 	// https://discord.com/api/webhooks/{webhook.id}/{webhook.token}
 
 	const prefix = "https://discord.com/api/webhooks/"
-	if !strings.HasPrefix(webhookURL, prefix) {
+	const legacyPrefix = "https://discordapp.com/api/webhooks/"
+
+	var remainder string
+	switch {
+	case strings.HasPrefix(webhookURL, prefix):
+		remainder = webhookURL[len(prefix):]
+	case strings.HasPrefix(webhookURL, legacyPrefix):
+		remainder = webhookURL[len(legacyPrefix):]
+	default:
 		return "", "", fmt.Errorf("invalid webhook URL format")
 	}
-
-	// Remove the prefix
-	remainder := webhookURL[len(prefix):]
 
 	// Split by '/' to get ID and token
 	parts := strings.Split(remainder, "/")
@@ -225,7 +230,9 @@ func parseWebhookURL(webhookURL string) (string, string, error) {
 	}
 
 	webhookID := parts[0]
-	webhookToken := parts[1]
+	// Strip query parameters or fragments from token (e.g. ?wait=true)
+	webhookToken := strings.SplitN(parts[1], "?", 2)[0]
+	webhookToken = strings.SplitN(webhookToken, "#", 2)[0]
 
 	if webhookID == "" || webhookToken == "" {
 		return "", "", fmt.Errorf("webhook ID or token is empty")

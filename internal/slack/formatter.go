@@ -45,12 +45,12 @@ func formatRansomwareMessage(entry api.RansomwareEntry, formatConfig *config.For
 		titleText = formatConfig.Slack.TitleText
 	}
 
-	// Header block (without emoji for Slack)
+	// Header block (without emoji for Slack, capped at 150 chars)
 	blocks = append(blocks, Block{
 		Type: "header",
 		Text: &TextObject{
 			Type: "plain_text",
-			Text: titleText,
+			Text: textutil.TruncateText(titleText, 150),
 		},
 	})
 
@@ -168,11 +168,14 @@ func formatRansomwareMessage(entry api.RansomwareEntry, formatConfig *config.For
 
 	// Add URLs section - each URL in its own section with dividers between them
 	urlsSectionAdded := false
+	renderedURLFields := map[string]bool{} // track rendered URL fields to prevent duplicates
 	for _, fieldName := range fieldOrder {
 		var urlBlock *Block
+		var dedupeKey string
 
 		switch fieldName {
 		case "screenshot":
+			dedupeKey = "screenshot"
 			value := placeholder
 			if entry.Screenshot != "" {
 				value = entry.Screenshot
@@ -189,15 +192,12 @@ func formatRansomwareMessage(entry api.RansomwareEntry, formatConfig *config.For
 				}
 			}
 		case "post_url", "claim_url":
+			dedupeKey = "claim_url"
 			value := placeholder
 			if entry.ClaimURL != "" {
 				value = textutil.DefangURL(entry.ClaimURL)
 			}
 			if entry.ClaimURL != "" || showEmpty {
-				// Add divider before Ransom URL if screenshot was added
-				if urlsSectionAdded {
-					blocks = append(blocks, Block{Type: "divider"})
-				}
 				urlBlock = &Block{
 					Type: "section",
 					Fields: []TextObject{
@@ -209,6 +209,7 @@ func formatRansomwareMessage(entry api.RansomwareEntry, formatConfig *config.For
 				}
 			}
 		case "url", "website":
+			dedupeKey = "website"
 			value := placeholder
 			if entry.URL != "" {
 				value = entry.URL
@@ -226,9 +227,13 @@ func formatRansomwareMessage(entry api.RansomwareEntry, formatConfig *config.For
 			}
 		}
 
-		if urlBlock != nil {
+		if urlBlock != nil && !renderedURLFields[dedupeKey] {
+			if urlsSectionAdded {
+				blocks = append(blocks, Block{Type: "divider"})
+			}
 			blocks = append(blocks, *urlBlock)
 			urlsSectionAdded = true
+			renderedURLFields[dedupeKey] = true
 		}
 	}
 
@@ -267,6 +272,11 @@ func formatRansomwareMessage(entry api.RansomwareEntry, formatConfig *config.For
 		},
 	})
 
+	// Slack Block Kit allows max 50 blocks per message
+	if len(blocks) > 50 {
+		blocks = blocks[:50]
+	}
+
 	return SlackMessage{
 		Text:   fallbackText,
 		Blocks: blocks,
@@ -286,12 +296,12 @@ func formatRSSMessage(entry rss.Entry, formatConfig *config.FormatConfig) SlackM
 		rssText = formatConfig.Slack.RSSText
 	}
 
-	// Header block (without emoji for Slack)
+	// Header block (without emoji for Slack, capped at 150 chars)
 	blocks = append(blocks, Block{
 		Type: "header",
 		Text: &TextObject{
 			Type: "plain_text",
-			Text: rssText,
+			Text: textutil.TruncateText(rssText, 150),
 		},
 	})
 
@@ -386,6 +396,11 @@ func formatRSSMessage(entry rss.Entry, formatConfig *config.FormatConfig) SlackM
 			},
 		},
 	})
+
+	// Slack Block Kit allows max 50 blocks per message
+	if len(blocks) > 50 {
+		blocks = blocks[:50]
+	}
 
 	return SlackMessage{
 		Text:   fallbackText,

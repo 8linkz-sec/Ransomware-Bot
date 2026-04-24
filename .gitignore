@@ -41,3 +41,6 @@ go.work.sum
 dist/
 build/
 tmp/
+
+# Audit
+Todo.txt

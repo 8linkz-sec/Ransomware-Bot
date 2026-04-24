@@ -35,6 +35,7 @@ type Scheduler struct {
 
 	// Channels for graceful shutdown
 	stopChan chan struct{}
+	stopOnce sync.Once
 	wg       sync.WaitGroup
 
 	// Tickers for scheduled tasks
@@ -176,8 +177,8 @@ func (s *Scheduler) RunOnce(ctx context.Context) {
 func (s *Scheduler) Stop() {
 	log.Info("Stopping scheduler")
 
-	// Signal all goroutines to stop
-	close(s.stopChan)
+	// Signal all goroutines to stop (safe against double-close)
+	s.stopOnce.Do(func() { close(s.stopChan) })
 
 	// Stop tickers
 	if s.apiTicker != nil {
@@ -194,9 +195,11 @@ func (s *Scheduler) Stop() {
 		close(done)
 	}()
 
+	graceful := false
 	select {
 	case <-done:
 		log.Info("All goroutines stopped gracefully")
+		graceful = true
 	case <-time.After(30 * time.Second):
 		log.Warn("Timeout waiting for goroutines to stop - forcing shutdown")
 	}
@@ -204,6 +207,11 @@ func (s *Scheduler) Stop() {
 	// Flush any pending tracker changes before shutdown (skip in dry-run to avoid persisting state)
 	if !s.dryRun {
 		s.statusTracker.SavePendingChanges()
+	}
+
+	if !graceful {
+		// Wait a bit more for goroutines to notice closed channels before closing clients
+		<-time.After(2 * time.Second)
 	}
 
 	// Close all clients to release resources
@@ -289,13 +297,19 @@ func (s *Scheduler) runConfigWatcher(ctx context.Context) {
 				log.WithError(err).Warn("Failed to check config file times")
 				continue
 			}
-			if latest.After(s.lastConfigTime) {
+			s.configMu.RLock()
+			needsReload := latest.After(s.lastConfigTime)
+			s.configMu.RUnlock()
+
+			if needsReload {
 				log.Info("Config file change detected, reloading...")
 				changed, err := s.ReloadConfig()
 				if err != nil {
 					log.WithError(err).Error("Config reload failed, keeping current config")
 				} else if changed {
+					s.configMu.Lock()
 					s.lastConfigTime = latest
+					s.configMu.Unlock()
 					log.Info("Config reloaded successfully")
 				}
 			}
@@ -317,14 +331,17 @@ func (s *Scheduler) ReloadConfig() (bool, error) {
 	newCfg.DataDir = oldCfg.DataDir
 
 	s.config = newCfg
+
+	// Rebuild feed type map (must be inside configMu to avoid race with readers)
+	s.feedTypeMap = buildFeedTypeMap(newCfg)
 	s.configMu.Unlock()
 
-	// Update tickers if intervals changed
-	if oldCfg.APIPollInterval != newCfg.APIPollInterval {
+	// Update tickers if intervals changed (nil-safe for calls before Start())
+	if oldCfg.APIPollInterval != newCfg.APIPollInterval && s.apiTicker != nil {
 		s.apiTicker.Reset(newCfg.APIPollInterval)
 		log.WithField("interval", newCfg.APIPollInterval).Info("API poll interval updated")
 	}
-	if oldCfg.RSSPollInterval != newCfg.RSSPollInterval {
+	if oldCfg.RSSPollInterval != newCfg.RSSPollInterval && s.rssTicker != nil {
 		s.rssTicker.Reset(newCfg.RSSPollInterval)
 		log.WithField("interval", newCfg.RSSPollInterval).Info("RSS poll interval updated")
 	}
@@ -337,9 +354,6 @@ func (s *Scheduler) ReloadConfig() (bool, error) {
 			log.WithField("level", newCfg.LogLevel).Info("Log level updated")
 		}
 	}
-
-	// Rebuild feed type map
-	s.feedTypeMap = buildFeedTypeMap(newCfg)
 
 	return true, nil
 }
@@ -916,13 +930,15 @@ func (s *Scheduler) sendUnsentRSSItems(ctx context.Context) {
 				continue
 			}
 
-			// Filter items by feed type using feedTypeMap
+			// Filter items by feed type using feedTypeMap (read under configMu)
+			s.configMu.RLock()
 			var filteredItems []status.StoredRSSEntry
 			for _, item := range unsentItems {
 				if s.feedTypeMap[item.FeedURL] == feedType {
 					filteredItems = append(filteredItems, item)
 				}
 			}
+			s.configMu.RUnlock()
 
 			if len(filteredItems) == 0 {
 				continue
