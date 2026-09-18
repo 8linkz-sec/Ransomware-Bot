@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1 - 2026-09-18
+
+### Improved
+
+- Config reload log lines no longer contain a fingerprint of your API key or webhook URLs.
+
 ## 1.2.0 - 2026-09-18
 
 Biggest update so far: flexible routing, better filters, a hardened container.

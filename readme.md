@@ -83,7 +83,7 @@ result rather than substituting for it.
 
 # Show version
 ./ransomware-news-bot --version
-# Example: Ransomware News Bot v1.2.0 (commit abc123, built 2026-09-05T12:00:00Z)
+# Example: Ransomware News Bot v1.2.1 (commit abc123, built 2026-09-05T12:00:00Z)
 ```
 
 | Flag | Description |
