@@ -1,15 +1,38 @@
+# Pin the Compose project name. Without this, Compose derives it from the clone
+# directory, so a clone in a folder called "Ransomware-Bot" produces a container
+# named ransomware-bot-... -- which is exactly the alarming string the binary and
+# service were renamed to avoid.
+name: ransomware-news-bot
+
 services:
-  ransomware-bot:
-    build: .
-    image: ransomware-bot
-    container_name: ransomware-bot
+  ransomware-news-bot:
+    build:
+      context: .
+      args:
+        APP_DIR: ${APP_DIR:-/app}
+        BOT_USER: ${BOT_USER:-botuser}
+        BOT_GROUP: ${BOT_GROUP:-botuser}
+        BOT_UID: ${BOT_UID:-1000}
+        BOT_GID: ${BOT_GID:-1000}
+        APP_READ_MODE: ${APP_READ_MODE:-755}
+        APP_PRIVATE_MODE: ${APP_PRIVATE_MODE:-750}
+    image: ransomware-news-bot:${RANSOMWARE_BOT_IMAGE_TAG:?set RANSOMWARE_BOT_IMAGE_TAG to a release or git SHA}
+    platform: ${RANSOMWARE_BOT_PLATFORM:-linux/amd64}
     restart: unless-stopped
     init: true
-    user: "botuser"
+    stop_grace_period: 45s
+    user: "${BOT_UID:-1000}:${BOT_GID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
     volumes:
-      - ./configs:/app/configs:ro
-      - ./logs:/app/logs
-      - ./data:/app/data
+      - ./configs:${APP_DIR:-/app}/configs:ro
+      - ./logs:${APP_DIR:-/app}/logs
+      - ./data:${APP_DIR:-/app}/data
     environment:
       - TZ=UTC
 
@@ -18,9 +41,10 @@ services:
         limits:
           memory: 512m
           cpus: "1.0"
+          pids: 128
 
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
-        max-file: "3"
+        max-file: "30"

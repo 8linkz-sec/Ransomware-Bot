@@ -5,4 +5,4 @@ on:
     branches: [main]
 jobs:
   lint:
-    uses: 8linkz-sec/.github/.github/workflows/golint.yml@main
+    uses: 8linkz-sec/.github/.github/workflows/golint.yml@81c64eae16f81e75452f8a0bd5edae352111e44d

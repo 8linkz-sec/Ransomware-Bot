@@ -6,10 +6,17 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
-	"gopkg.in/natefinch/lumberjack.v2"
 )
+
+const serviceName = "ransomware-news-bot"
+
+// Fields and Entry expose the small structured logging surface used by runtime
+// packages while keeping the concrete backend contained in this package.
+type Fields = logrus.Fields
+type Entry = logrus.Entry
 
 // LogRotationConfig contains log rotation settings
 type LogRotationConfig struct {
@@ -19,11 +26,25 @@ type LogRotationConfig struct {
 	Compress   bool
 }
 
-// ljLogger holds the reference to the lumberjack logger for cleanup
+// logFileWriter holds the active rotating file writer for cleanup.
 var (
-	ljLogger  *lumberjack.Logger
-	ljLoggerMu sync.Mutex
+	logFileWriter        *rotatingFileWriter
+	logFileWriterMu      sync.Mutex
+	serviceHookInstalled bool
 )
+
+type serviceHook struct{}
+
+func (serviceHook) Levels() []logrus.Level {
+	return logrus.AllLevels
+}
+
+func (serviceHook) Fire(entry *logrus.Entry) error {
+	if _, ok := entry.Data["service"]; !ok {
+		entry.Data["service"] = serviceName
+	}
+	return nil
+}
 
 // NewLogger creates a new logger instance with file and console output
 // Sets the global logrus logger configuration
@@ -35,63 +56,140 @@ func NewLogger(logLevel string, logFilePath string, rotationConfig LogRotationCo
 	}
 	logrus.SetLevel(level)
 
-	// Set up lumberjack for log rotation
-	ljLoggerMu.Lock()
-	defer ljLoggerMu.Unlock()
+	logFileWriterMu.Lock()
+	defer logFileWriterMu.Unlock()
 
-	// Close previous logger if open
-	if ljLogger != nil {
-		_ = ljLogger.Close()
-	}
+	// Close previous logger if open, after pointing logrus somewhere safe.
+	_ = resetOutputAndCloseCurrentLocked()
 
-	ljLogger = &lumberjack.Logger{
-		Filename:   logFilePath,
-		MaxSize:    rotationConfig.MaxSizeMB,
-		MaxBackups: rotationConfig.MaxBackups,
-		MaxAge:     rotationConfig.MaxAgeDays,
-		Compress:   rotationConfig.Compress,
+	writer, err := newRotatingFileWriter(logFilePath, rotationConfig)
+	if err != nil {
+		return err
 	}
+	logFileWriter = writer
 
 	// Set up multi-writer to write to both file (with rotation) and console
-	multiWriter := io.MultiWriter(os.Stdout, ljLogger)
+	multiWriter := io.MultiWriter(os.Stdout, logFileWriter)
 	logrus.SetOutput(multiWriter)
 
-	// Set custom formatter on global logger
-	logrus.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp:   true,
-		TimestampFormat: "2006-01-02 15:04:05",
-		ForceColors:     false, // Disable colors for file output
+	// Set structured formatter on global logger
+	ensureServiceHook()
+	logrus.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat: time.RFC3339,
 	})
 
 	// Log initial message
 	logrus.WithFields(logrus.Fields{
-		"level":       logLevel,
-		"log_file":    logFilePath,
-		"max_size":    fmt.Sprintf("%dMB", rotationConfig.MaxSizeMB),
-		"max_backups": rotationConfig.MaxBackups,
-		"max_age":     fmt.Sprintf("%d days", rotationConfig.MaxAgeDays),
-		"compress":    rotationConfig.Compress,
+		"level":        logLevel,
+		"log_file":     logFilePath,
+		"max_size_mb":  rotationConfig.MaxSizeMB,
+		"max_backups":  rotationConfig.MaxBackups,
+		"max_age_days": rotationConfig.MaxAgeDays,
+		"compress":     rotationConfig.Compress,
 	}).Info("Logger initialized with log rotation")
 
 	return nil
 }
 
+// NewStdoutLogger configures the global logger for stdout-only output.
+func NewStdoutLogger(logLevel string) error {
+	level, err := parseLogLevel(logLevel)
+	if err != nil {
+		return fmt.Errorf("invalid log level: %w", err)
+	}
+	logrus.SetLevel(level)
+
+	logFileWriterMu.Lock()
+	defer logFileWriterMu.Unlock()
+
+	_ = resetOutputAndCloseCurrentLocked()
+
+	ensureServiceHook()
+	logrus.SetFormatter(&logrus.JSONFormatter{
+		TimestampFormat: time.RFC3339,
+	})
+
+	logrus.WithField("level", logLevel).Info("Logger initialized with stdout output only")
+	return nil
+}
+
+func WithField(key string, value interface{}) *Entry {
+	return logrus.WithField(key, value)
+}
+
+func WithFields(fields Fields) *Entry {
+	return logrus.WithFields(logrus.Fields(fields))
+}
+
+func WithError(err error) *Entry {
+	return logrus.WithError(err)
+}
+
+func Trace(args ...interface{}) {
+	logrus.Trace(args...)
+}
+
+func Debug(args ...interface{}) {
+	logrus.Debug(args...)
+}
+
+func Info(args ...interface{}) {
+	logrus.Info(args...)
+}
+
+func Warn(args ...interface{}) {
+	logrus.Warn(args...)
+}
+
+func Error(args ...interface{}) {
+	logrus.Error(args...)
+}
+
+// SetLevel updates the global logger level using the package's level policy.
+func SetLevel(logLevel string) error {
+	level, err := parseLogLevel(logLevel)
+	if err != nil {
+		return fmt.Errorf("invalid log level: %w", err)
+	}
+	logrus.SetLevel(level)
+	return nil
+}
+
+func ensureServiceHook() {
+	if serviceHookInstalled {
+		return
+	}
+	logrus.AddHook(serviceHook{})
+	serviceHookInstalled = true
+}
+
+// resetOutputAndCloseCurrentLocked points the global logger back at stdout and
+// then closes the active file writer. Callers must hold logFileWriterMu.
+// Order matters: a closed writer refuses every write, so logrus has to be
+// writing somewhere else before the close happens.
+func resetOutputAndCloseCurrentLocked() error {
+	logrus.SetOutput(os.Stdout)
+	if logFileWriter == nil {
+		return nil
+	}
+	err := logFileWriter.Close()
+	logFileWriter = nil
+	return err
+}
+
 // Close closes the log file and should be called during application shutdown
 func Close() error {
-	ljLoggerMu.Lock()
-	defer ljLoggerMu.Unlock()
+	logFileWriterMu.Lock()
+	defer logFileWriterMu.Unlock()
 
-	if ljLogger != nil {
-		err := ljLogger.Close()
-		ljLogger = nil
-		return err
-	}
-	return nil
+	return resetOutputAndCloseCurrentLocked()
 }
 
 // parseLogLevel converts string log level to logrus.Level
 func parseLogLevel(level string) (logrus.Level, error) {
 	switch strings.ToUpper(level) {
+	case "TRACE":
+		return logrus.TraceLevel, nil
 	case "DEBUG":
 		return logrus.DebugLevel, nil
 	case "INFO":

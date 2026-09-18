@@ -1,5 +1,8 @@
 {
   "show_unicode_flags": true,
+  "display_locale": "en",
+  "timestamp_format": "2006-01-02 15:04:05 MST",
+  "display_timezone": "UTC",
   "show_empty_fields": true,
   "empty_field_text": "N/A",
   "field_order": [
@@ -9,25 +12,50 @@
     "website",
     "group",
     "discovered",
-    "attackdate",
+    "attack_date",
     "description",
     "screenshot",
     "post_url"
   ],
+  "field_labels": {},
+  "rss": {
+    "title_text": "RSS Feed Update",
+    "show_author": false,
+    "field_order": [
+      "title",
+      "description",
+      "link",
+      "author",
+      "categories",
+      "published",
+      "feed_title"
+    ],
+    "field_labels": {}
+  },
+  "discord": {
+    "show_icons": true,
+    "ransomware_color": "#ff0000",
+    "rss_color": "#0099ff",
+    "government_color": "#ffa500",
+    "description_max_chars": 500,
+    "field_labels": {}
+  },
   "slack": {
     "title_text": "Ransomware Alert",
     "rss_text": "RSS Feed Update",
+    "description_max_chars": 500,
     "field_order": [
       "group",
       "victim",
       "country",
       "activity",
-      "attackdate",
+      "attack_date",
       "discovered",
       "screenshot",
       "post_url",
       "website",
       "description"
-    ]
+    ],
+    "field_labels": {}
   }
 }

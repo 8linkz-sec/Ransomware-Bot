@@ -5,26 +5,45 @@ README.md
 logs/
 *.log
 data/
+bot/data/
+bot/logs/
 status.json
+*.json.tmp
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-ransomware-bot
+ransomware-news-bot
 *.exe
 Dockerfile
 docker-compose.yml
+
+# Local config and secrets
+.env
+.env.*
+*.secret
+*.pem
+*.key
+*.crt
+settings.local.json
+*.local.json
+configs/
 
 # Test artifacts (keep out of prod build context)
 **/*_test.go
 **/testdata/
 *.test
 *.out
+*.cover
+*.prof
+coverage.out
 
 # Claude/AI
 .claude/
+.codex-work/
 Todo.txt
 
 # Temp
 tmp/
+.gotmp/
 *.tmp
