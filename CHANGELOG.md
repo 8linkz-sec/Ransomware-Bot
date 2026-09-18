@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.0
+## 1.2.0 - 2026-09-18
 
 Biggest update so far: flexible routing, better filters, a hardened container.
 
