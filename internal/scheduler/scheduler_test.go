@@ -1553,8 +1553,8 @@ func TestReloadConfigAuditsAlertRoutingChangesWithoutSecrets(t *testing.T) {
 	if enabledEntry.Data["component"] != "config_reload" {
 		t.Fatalf("component = %#v, want config_reload", enabledEntry.Data["component"])
 	}
-	if findTestLogEntryWithField(hook, "Config reload alert routing changed", "field", "slack.rss.url_sha256_prefix") == nil {
-		t.Fatal("missing webhook URL fingerprint audit entry")
+	if findTestLogEntryWithField(hook, "Config reload alert routing changed", "field", "slack.rss.url") == nil {
+		t.Fatal("missing webhook URL change audit entry")
 	}
 	if findTestLogEntryWithField(hook, "Config reload alert routing changed", "field", "feeds.general_feeds") == nil {
 		t.Fatal("missing feed-list audit entry")
@@ -1565,8 +1565,8 @@ func TestReloadConfigAuditsAlertRoutingChangesWithoutSecrets(t *testing.T) {
 	if findTestLogEntryWithField(hook, "Config reload alert routing changed", "field", "slack.rss.quiet_hours_sha256_prefix") == nil {
 		t.Fatal("missing webhook quiet-hours audit entry")
 	}
-	if findTestLogEntryWithField(hook, "Config reload alert routing changed", "field", "api.key_sha256_prefix") == nil {
-		t.Fatal("missing API key fingerprint audit entry")
+	if findTestLogEntryWithField(hook, "Config reload alert routing changed", "field", "api.key") == nil {
+		t.Fatal("missing API key change audit entry")
 	}
 	if findTestLogEntryWithField(hook, "Config reload alert routing changed", "field", "slack_delay_ms") == nil {
 		t.Fatal("missing delivery timing audit entry")
@@ -1576,6 +1576,67 @@ func TestReloadConfigAuditsAlertRoutingChangesWithoutSecrets(t *testing.T) {
 		rendered := entry.Message + " " + fmt.Sprint(entry.Data)
 		if strings.Contains(rendered, webhookURL) || strings.Contains(rendered, "security") || strings.Contains(rendered, "test-key") {
 			t.Fatalf("audit log leaked raw routing secret or filter value: %s", rendered)
+		}
+	}
+}
+
+func TestReloadConfigAuditNeverHashesSecrets(t *testing.T) {
+	oldCfg := config.DefaultConfig()
+	oldCfg.APIKey = "old-secret-key-AAAA"
+	oldCfg.APIBaseURL = "https://olduser:oldpass@api.example.test"
+	oldCfg.SlackWebhooks.RSS = config.WebhookConfig{
+		Enabled: true,
+		URL:     "https://hooks.slack.com/services/OLD/TOKEN/aaaaaaaaaaaaaaaaaaaaaaaa", //nolint:gosec // G101: test fixture, not a real credential
+	}
+
+	newCfg := *oldCfg
+	newCfg.APIKey = "new-secret-key-BBBB"
+	newCfg.APIBaseURL = "https://newuser:newpass@api.example.test"
+	newCfg.SlackWebhooks.RSS = config.WebhookConfig{
+		Enabled: true,
+		URL:     "https://hooks.slack.com/services/NEW/TOKEN/bbbbbbbbbbbbbbbbbbbbbbbb", //nolint:gosec // G101: test fixture, not a real credential
+	}
+
+	events := configReloadAuditEvents(oldCfg, &newCfg)
+
+	secrets := []string{
+		oldCfg.APIKey, newCfg.APIKey,
+		oldCfg.APIBaseURL, newCfg.APIBaseURL,
+		oldCfg.SlackWebhooks.RSS.URL, newCfg.SlackWebhooks.RSS.URL,
+	}
+	forbidden := make([]string, 0, 2*len(secrets))
+	for _, secret := range secrets {
+		forbidden = append(forbidden, secret, safeHashPrefix(secret))
+	}
+	for _, event := range events {
+		rendered := fmt.Sprint(event)
+		for _, value := range forbidden {
+			if strings.Contains(rendered, value) {
+				t.Fatalf("event %q contains %q (a secret or a hash derived from one): %#v", event["field"], value, event)
+			}
+		}
+	}
+
+	byField := make(map[string]map[string]any, len(events))
+	for _, event := range events {
+		field, _ := event["field"].(string)
+		byField[field] = event
+	}
+	for _, field := range []string{"api.key", "api.base_url", "slack.rss.url"} {
+		event, ok := byField[field]
+		if !ok {
+			t.Fatalf("missing reload audit event %q; events=%#v", field, events)
+		}
+		keys := make([]string, 0, len(event))
+		for key := range event {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		if got, want := strings.Join(keys, ","), "component,field,new_present,old_present"; got != want {
+			t.Fatalf("event %q keys = %s, want %s: %#v", field, got, want, event)
+		}
+		if event["old_present"] != true || event["new_present"] != true {
+			t.Fatalf("event %q old_present/new_present = %#v/%#v, want true/true", field, event["old_present"], event["new_present"])
 		}
 	}
 }
