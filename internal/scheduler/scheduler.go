@@ -1265,6 +1265,17 @@ func auditConfigReloadChanges(oldCfg, newCfg *config.Config) {
 	}
 }
 
+// configReloadAuditEvents reports every changed setting between two config
+// snapshots for the "Config reload alert routing changed" log line. Secret
+// values (the API key, the API base URL -- which may carry userinfo
+// credentials, see NormalizeBaseURL -- and every webhook URL, which embeds
+// its delivery token) are reported only as old_present/new_present: no hash,
+// prefix, or other value derived from the secret. An unsalted hash of a
+// guessable or low-entropy secret can be verified offline by anyone holding
+// the log, which defeats the point of not logging the secret itself.
+// safeHashPrefix stays in use for non-secret settings (format, filters, quiet
+// hours, feed URL lists -- internal/feedurl rejects userinfo and deny-listed
+// credential query keys in feed URLs at load time).
 func configReloadAuditEvents(oldCfg, newCfg *config.Config) []log.Fields {
 	if oldCfg == nil || newCfg == nil {
 		return nil
@@ -1286,19 +1297,15 @@ func configReloadAuditEvents(oldCfg, newCfg *config.Config) []log.Fields {
 func coreConfigReloadAuditEvents(oldCfg, newCfg *config.Config) []log.Fields {
 	events := make([]log.Fields, 0)
 	if oldCfg.APIKey != newCfg.APIKey {
-		events = append(events, configReloadAuditEvent("api.key_sha256_prefix", log.Fields{
-			"old_present":       strings.TrimSpace(oldCfg.APIKey) != "",
-			"new_present":       strings.TrimSpace(newCfg.APIKey) != "",
-			"old_sha256_prefix": safeHashPrefix(oldCfg.APIKey),
-			"new_sha256_prefix": safeHashPrefix(newCfg.APIKey),
+		events = append(events, configReloadAuditEvent("api.key", log.Fields{
+			"old_present": strings.TrimSpace(oldCfg.APIKey) != "",
+			"new_present": strings.TrimSpace(newCfg.APIKey) != "",
 		}))
 	}
 	if oldCfg.APIBaseURL != newCfg.APIBaseURL {
-		events = append(events, configReloadAuditEvent("api.base_url_sha256_prefix", log.Fields{
-			"old_present":       strings.TrimSpace(oldCfg.APIBaseURL) != "",
-			"new_present":       strings.TrimSpace(newCfg.APIBaseURL) != "",
-			"old_sha256_prefix": safeHashPrefix(oldCfg.APIBaseURL),
-			"new_sha256_prefix": safeHashPrefix(newCfg.APIBaseURL),
+		events = append(events, configReloadAuditEvent("api.base_url", log.Fields{
+			"old_present": strings.TrimSpace(oldCfg.APIBaseURL) != "",
+			"new_present": strings.TrimSpace(newCfg.APIBaseURL) != "",
 		}))
 	}
 
@@ -1371,11 +1378,9 @@ func webhookReloadAuditEvents(oldCfg, newCfg *config.Config) []log.Fields {
 			}))
 		}
 		if oldTarget.Webhook.URL != newTarget.Webhook.URL {
-			events = append(events, configReloadAuditEvent(qualifiedName+".url_sha256_prefix", log.Fields{
-				"old_present":       strings.TrimSpace(oldTarget.Webhook.URL) != "",
-				"new_present":       strings.TrimSpace(newTarget.Webhook.URL) != "",
-				"old_sha256_prefix": safeHashPrefix(oldTarget.Webhook.URL),
-				"new_sha256_prefix": safeHashPrefix(newTarget.Webhook.URL),
+			events = append(events, configReloadAuditEvent(qualifiedName+".url", log.Fields{
+				"old_present": strings.TrimSpace(oldTarget.Webhook.URL) != "",
+				"new_present": strings.TrimSpace(newTarget.Webhook.URL) != "",
 			}))
 		}
 		if oldHash, newHash := safeHashPrefix(oldTarget.Webhook.Filters), safeHashPrefix(newTarget.Webhook.Filters); oldHash != newHash {
