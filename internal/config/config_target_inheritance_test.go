@@ -303,7 +303,7 @@ func TestValidateConfigWarnsOnceForTargetInheritance(t *testing.T) {
 					Enabled:    true,
 					URL:        sharedSlackURL,
 					QuietHours: blockQuietHours,
-					Targets:    []WebhookTarget{{URL: "https://hooks.slack.com/services/T00000000/B00000000/otherTargetFixtureToken"}}, //nolint:gosec // G101: test fixture, not a real credential
+					Targets:    []WebhookTarget{{URL: "https://hooks.slack.com/services/T12345678/B12345678/abcdefghijklmnopqrstuvwxyz098765"}}, //nolint:gosec // G101: test fixture, not a real credential
 				}
 				return cfg
 			}(),
