@@ -1,4 +1,20 @@
 # Enforce LF in repo to avoid CRLF churn on Windows.
-*.go   text eol=lf
-go.mod text eol=lf
-go.sum text eol=lf
+* text=auto
+
+*.go    text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.sh    text eol=lf
+*.ps1   text eol=lf
+*.toml  text eol=lf
+*.env   text eol=lf
+
+Dockerfile     text eol=lf
+.dockerignore  text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf

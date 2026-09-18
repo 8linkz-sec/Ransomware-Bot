@@ -1,0 +1,88 @@
+{
+  "log_level": "INFO",
+  "log_file_path": "./logs/bot.log",
+  "log_rotation": {
+    "max_size_mb": 10,
+    "max_backups": 30,
+    "max_age_days": 90,
+    "compress": true
+  },
+  "max_rss_workers": 5,
+  "api_key": "",
+  "api_base_url": "https://api-pro.ransomware.live",
+  "api_request_timeout": "30s",
+  "api_max_retries": 3,
+  "api_retry_delay": "1s",
+  "api_poll_interval": "1h",
+  "api_check_timeout": "5m",
+  "rss_poll_interval": "30m",
+  "rss_check_timeout": "10m",
+  "rss_retry_count": 3,
+  "rss_retry_delay": "2s",
+  "rss_worker_timeout": "30s",
+  "rss_max_item_age": "",
+  "max_api_entries_per_cycle": 100,
+  "max_rss_entries_per_cycle": 100,
+  "data_dir": "./data",
+  "discord_delay": "2s",
+  "webhook_request_timeout": "10s",
+  "webhook_max_retries": 3,
+  "webhook_retry_delay": "1s",
+  "retry_max_attempts": 5,
+  "retry_window": "24h",
+  "status_retention": {
+    "max_api_sent_items": 100000,
+    "max_rss_parsed_items": 10000,
+    "rss_parsed_max_age": "8760h",
+    "max_rss_sent_items": 100000,
+    "max_retry_queue_items": 10000,
+    "retry_queue_max_age": "720h",
+    "max_dead_letter_items": 10000,
+    "dead_letter_max_age": "720h"
+  },
+  "discord_webhooks": {
+    "ransomware": {
+      "enabled": false,
+      "url": ""
+    },
+    "rss": {
+      "enabled": false,
+      "url": "",
+      "targets": []
+    },
+    "government": {
+      "enabled": false,
+      "url": ""
+    }
+  },
+  "slack_delay": "2s",
+  "slack_webhooks": {
+    "ransomware": {
+      "enabled": false,
+      "url": ""
+    },
+    "rss": {
+      "enabled": false,
+      "url": ""
+    },
+    "government": {
+      "enabled": false,
+      "url": ""
+    }
+  },
+  "slack_compatible_webhook_hosts": [],
+  "slack_compatible_webhooks": {
+    "ransomware": {
+      "enabled": false,
+      "url": ""
+    },
+    "rss": {
+      "enabled": false,
+      "url": ""
+    },
+    "government": {
+      "enabled": false,
+      "url": ""
+    }
+  }
+}
