@@ -3,7 +3,7 @@
 *.dll
 *.so
 *.dylib
-ransomware-bot
+ransomware-news-bot
 
 # Data and logs (contains sensitive victim information)
 bot/data/
@@ -19,6 +19,8 @@ settings.local.json
 .env
 .env.local
 *.secret
+configs/config_general.json
+configs/*.local.json
 
 # IDE
 .vscode/
@@ -33,14 +35,25 @@ vendor/
 go.work
 go.work.sum
 
-# Tests
-*_test.go
-**/testdata/
-
 # Build artifacts
 dist/
 build/
 tmp/
+.gotmp/
 
 # Audit
 Todo.txt
+Agent.md
+Design.md
+Architektur.md
+.codex-work/
+
+# Exported Docker images
+*.tar
+
+# Local working documents (not versioned)
+WORKFLOW.md
+TESTING.md
+
+# Agent briefing (local, not versioned)
+CLAUDE.md
