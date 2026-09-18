@@ -1,0 +1,52 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: go test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # go-version-file reads go.mod directly rather than a version pinned
+      # here: setup-go prefers the `toolchain` directive over the `go`
+      # directive when both are present, so this always installs exactly the
+      # toolchain version go.mod declares (currently go1.27.1) with no second
+      # place to keep in sync. GOTOOLCHAIN is left at its default ("auto")
+      # deliberately -- GOTOOLCHAIN=local exists only to route around
+      # Windows Defender quarantining the auto-downloaded toolchain's asm.exe
+      # on the operator's dev machine (see CLAUDE.md); that problem does not
+      # exist on this Linux runner, and pinning to local here would freeze
+      # this job on whatever Go setup-go happens to install instead of
+      # letting it track go.mod on every run, which defeats the point.
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: go vet
+        run: go vet ./...
+
+      # Run first without -race: fast, and a failure here is a plain logic
+      # bug, not a data race, so keeping it as its own step keeps the two
+      # failure modes distinguishable in the Actions UI.
+      - name: go test
+        run: go test ./... -count=1 -timeout=10m
+
+      # A handful of tests deliberately wait out real timeouts (the
+      # scheduler's ~30s forced-shutdown path, the subprocess shutdown
+      # tests); -timeout=10m gives those room without leaving a genuine
+      # deadlock to run until the job's own limit. Some tests are timing- or
+      # scheduling-sensitive under the race detector's instrumentation, so
+      # -race runs as its own step: a race failure here should never be read
+      # as the plain step above having been wrong.
+      - name: go test -race
+        run: go test ./... -race -count=1 -timeout=10m

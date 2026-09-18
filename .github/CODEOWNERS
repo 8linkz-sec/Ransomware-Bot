@@ -1,0 +1,20 @@
+# Default owner for repository changes.
+* @8linkz-sec
+
+# Security-sensitive runtime, delivery, and deployment surfaces.
+.github/ @8linkz-sec
+Dockerfile @8linkz-sec
+docker-compose.yml @8linkz-sec
+configs/ @8linkz-sec
+internal/api/ @8linkz-sec
+internal/config/ @8linkz-sec
+internal/discord/ @8linkz-sec
+internal/rss/ @8linkz-sec
+internal/scheduler/ @8linkz-sec
+internal/slack/ @8linkz-sec
+internal/status/ @8linkz-sec
+internal/webhookhttp/ @8linkz-sec
+
+# Operator-facing docs.
+SECURITY.md @8linkz-sec
+PRIVACY.md @8linkz-sec

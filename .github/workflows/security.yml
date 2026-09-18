@@ -5,11 +5,11 @@ on:
     branches: [main]
 jobs:
   vulncheck:
-    uses: 8linkz-sec/.github/.github/workflows/govulncheck.yml@main
+    uses: 8linkz-sec/.github/.github/workflows/govulncheck.yml@81c64eae16f81e75452f8a0bd5edae352111e44d
     secrets:
       DISCORD_VULN: ${{ secrets.DISCORD_VULN }}
   codeql:
-    uses: 8linkz-sec/.github/.github/workflows/codeql.yml@main
+    uses: 8linkz-sec/.github/.github/workflows/codeql.yml@81c64eae16f81e75452f8a0bd5edae352111e44d
     secrets:
       DISCORD_VULN: ${{ secrets.DISCORD_VULN }}
     permissions:
