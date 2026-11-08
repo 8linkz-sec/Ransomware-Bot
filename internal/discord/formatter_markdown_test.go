@@ -425,93 +425,12 @@ func TestDiscordEscapeStaysOffOperatorOwnedText(t *testing.T) {
 		"screenshot":  "[Shot]",
 	}
 
-	assertPlain := func(t *testing.T, what, value string) {
-		t.Helper()
-		if strings.Contains(value, `\`) {
-			t.Fatalf("%s = %q is operator-owned text and must not be escaped", what, value)
-		}
-	}
-
 	t.Run("rss route", func(t *testing.T) {
-		formatCfg := notifyfmt.DefaultFormatOptions()
-		formatCfg.EmptyFieldText = placeholder
-		formatCfg.ShowEmptyFields = true
-		formatCfg.FieldLabels = labels
-		formatCfg.RSS.ShowAuthor = true
-		formatCfg.RSS.FieldOrder = []string{
-			formatfields.RSSFieldTitle,
-			formatfields.RSSFieldDescription,
-			formatfields.RSSFieldLink,
-			formatfields.RSSFieldAuthor,
-			formatfields.RSSFieldCategories,
-			formatfields.RSSFieldPublished,
-			formatfields.RSSFieldFeedTitle,
-			formatfields.RSSFieldFeedURL,
-		}
-
-		// Everything empty, so every sink renders the placeholder.
-		embed := formatRSSEmbed(rss.Entry{Title: "Headline"}, config.FeedTypeGeneral, &formatCfg)
-
-		assertPlain(t, "embed.Description", embed.Description)
-		if embed.Author != nil {
-			assertPlain(t, "embed.Author.Name", embed.Author.Name)
-		}
-		if embed.Footer != nil {
-			assertPlain(t, "embed.Footer.Text", embed.Footer.Text)
-		}
-		if len(embed.Fields) == 0 {
-			t.Fatal("no fields rendered, the placeholder path was not exercised")
-		}
-		sawCategories := false
-		for _, field := range embed.Fields {
-			assertPlain(t, "field name "+field.Name, field.Name)
-			assertPlain(t, "field value of "+field.Name, field.Value)
-			if strings.Contains(field.Name, "[Cat]") {
-				sawCategories = true
-				if stripIsolates(field.Value) != placeholder {
-					t.Fatalf("Categories value = %q, want the placeholder %q verbatim",
-						field.Value, placeholder)
-				}
-			}
-		}
-		if !sawCategories {
-			t.Fatal("Categories field missing, the placeholder path was not exercised")
-		}
+		assertDiscordOperatorOwnedRSSRoute(t, labels, placeholder)
 	})
 
 	t.Run("ransomware route", func(t *testing.T) {
-		formatCfg := notifyfmt.DefaultFormatOptions()
-		formatCfg.EmptyFieldText = placeholder
-		formatCfg.ShowEmptyFields = true
-		formatCfg.FieldLabels = labels
-		formatCfg.FieldOrder = []string{
-			formatfields.FieldGroup,
-			formatfields.FieldVictim,
-			formatfields.FieldDescription,
-			formatfields.FieldPostURL,
-			formatfields.FieldWebsite,
-			formatfields.FieldScreenshot,
-		}
-
-		embed := formatRansomwareEmbed(api.RansomwareEntry{
-			Discovered: time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC),
-		}, &formatCfg)
-
-		assertPlain(t, "embed.Title", embed.Title)
-		if embed.Footer != nil {
-			assertPlain(t, "embed.Footer.Text", embed.Footer.Text)
-		}
-		if len(embed.Fields) == 0 {
-			t.Fatal("no fields rendered, the placeholder path was not exercised")
-		}
-		for _, field := range embed.Fields {
-			assertPlain(t, "field name "+field.Name, field.Name)
-			assertPlain(t, "field value of "+field.Name, field.Value)
-			if field.Value != placeholder {
-				t.Fatalf("field %q value = %q, want the placeholder %q verbatim",
-					field.Name, field.Value, placeholder)
-			}
-		}
+		assertDiscordOperatorOwnedRansomwareRoute(t, labels, placeholder)
 	})
 
 	// A non-empty Categories list still goes through the escape: the operator
@@ -533,6 +452,97 @@ func TestDiscordEscapeStaysOffOperatorOwnedText(t *testing.T) {
 		assertNoLiveMaskedLink(t, "Categories field", embed.Fields[index].Value)
 		assertEscapedBrackets(t, "Categories field", embed.Fields[index].Value)
 	})
+}
+
+func assertDiscordOperatorOwnedTextPlain(t *testing.T, what, value string) {
+	t.Helper()
+	if strings.Contains(value, `\`) {
+		t.Fatalf("%s = %q is operator-owned text and must not be escaped", what, value)
+	}
+}
+
+func assertDiscordOperatorOwnedRSSRoute(t *testing.T, labels map[string]string, placeholder string) {
+	t.Helper()
+	formatCfg := notifyfmt.DefaultFormatOptions()
+	formatCfg.EmptyFieldText = placeholder
+	formatCfg.ShowEmptyFields = true
+	formatCfg.FieldLabels = labels
+	formatCfg.RSS.ShowAuthor = true
+	formatCfg.RSS.FieldOrder = []string{
+		formatfields.RSSFieldTitle,
+		formatfields.RSSFieldDescription,
+		formatfields.RSSFieldLink,
+		formatfields.RSSFieldAuthor,
+		formatfields.RSSFieldCategories,
+		formatfields.RSSFieldPublished,
+		formatfields.RSSFieldFeedTitle,
+		formatfields.RSSFieldFeedURL,
+	}
+
+	// Everything empty, so every sink renders the placeholder.
+	embed := formatRSSEmbed(rss.Entry{Title: "Headline"}, config.FeedTypeGeneral, &formatCfg)
+
+	assertDiscordOperatorOwnedTextPlain(t, "embed.Description", embed.Description)
+	if embed.Author != nil {
+		assertDiscordOperatorOwnedTextPlain(t, "embed.Author.Name", embed.Author.Name)
+	}
+	if embed.Footer != nil {
+		assertDiscordOperatorOwnedTextPlain(t, "embed.Footer.Text", embed.Footer.Text)
+	}
+	if len(embed.Fields) == 0 {
+		t.Fatal("no fields rendered, the placeholder path was not exercised")
+	}
+	sawCategories := false
+	for _, field := range embed.Fields {
+		assertDiscordOperatorOwnedTextPlain(t, "field name "+field.Name, field.Name)
+		assertDiscordOperatorOwnedTextPlain(t, "field value of "+field.Name, field.Value)
+		if strings.Contains(field.Name, "[Cat]") {
+			sawCategories = true
+			if stripIsolates(field.Value) != placeholder {
+				t.Fatalf("Categories value = %q, want the placeholder %q verbatim",
+					field.Value, placeholder)
+			}
+		}
+	}
+	if !sawCategories {
+		t.Fatal("Categories field missing, the placeholder path was not exercised")
+	}
+}
+
+func assertDiscordOperatorOwnedRansomwareRoute(t *testing.T, labels map[string]string, placeholder string) {
+	t.Helper()
+	formatCfg := notifyfmt.DefaultFormatOptions()
+	formatCfg.EmptyFieldText = placeholder
+	formatCfg.ShowEmptyFields = true
+	formatCfg.FieldLabels = labels
+	formatCfg.FieldOrder = []string{
+		formatfields.FieldGroup,
+		formatfields.FieldVictim,
+		formatfields.FieldDescription,
+		formatfields.FieldPostURL,
+		formatfields.FieldWebsite,
+		formatfields.FieldScreenshot,
+	}
+
+	embed := formatRansomwareEmbed(api.RansomwareEntry{
+		Discovered: time.Date(2026, 9, 3, 10, 0, 0, 0, time.UTC),
+	}, &formatCfg)
+
+	assertDiscordOperatorOwnedTextPlain(t, "embed.Title", embed.Title)
+	if embed.Footer != nil {
+		assertDiscordOperatorOwnedTextPlain(t, "embed.Footer.Text", embed.Footer.Text)
+	}
+	if len(embed.Fields) == 0 {
+		t.Fatal("no fields rendered, the placeholder path was not exercised")
+	}
+	for _, field := range embed.Fields {
+		assertDiscordOperatorOwnedTextPlain(t, "field name "+field.Name, field.Name)
+		assertDiscordOperatorOwnedTextPlain(t, "field value of "+field.Name, field.Value)
+		if field.Value != placeholder {
+			t.Fatalf("field %q value = %q, want the placeholder %q verbatim",
+				field.Name, field.Value, placeholder)
+		}
+	}
 }
 
 func assertRuneLimit(t *testing.T, n int, name, value string, limit int) {
@@ -639,21 +649,28 @@ func hasDanglingEscape(text string) bool {
 	return endsWithLiveEscape(text)
 }
 
+type discordMarkdownRenderHelper struct {
+	name   string
+	render func(string, int) string
+}
+
 // TestDiscordMarkdownEscapeLeavesNoDanglingBackslash pins the truncation
 // artefact escape-before-truncate introduces: the cut can land between a
 // backslash and the character it escapes, and Discord would display that
 // backslash. It also re-proves invariant 9 over the sweep: truncating an
 // escaped string can never re-form a live masked link.
 func TestDiscordMarkdownEscapeLeavesNoDanglingBackslash(t *testing.T) {
-	helpers := []struct {
-		name   string
-		render func(string, int) string
-	}{
+	helpers := []discordMarkdownRenderHelper{
 		{name: "discordRichText", render: discordRichText},
 		{name: "discordDescriptionText", render: discordDescriptionText},
 		{name: "discordURLText", render: discordURLText},
 	}
+	assertDiscordMeasuredTruncationRows(t, helpers)
+	assertDiscordTruncationSweep(t, helpers)
+}
 
+func assertDiscordMeasuredTruncationRows(t *testing.T, helpers []discordMarkdownRenderHelper) {
+	t.Helper()
 	// The +2 budget accounts for the isolate pair the helpers reserve, so the
 	// truncator sees exactly the budget from the measured table.
 	rows := []struct {
@@ -673,7 +690,10 @@ func TestDiscordMarkdownEscapeLeavesNoDanglingBackslash(t *testing.T) {
 			}
 		}
 	}
+}
 
+func assertDiscordTruncationSweep(t *testing.T, helpers []discordMarkdownRenderHelper) {
+	t.Helper()
 	payloads := []string{
 		strings.Repeat("x", 40) + "[y]" + strings.Repeat("z", 200),
 		strings.Repeat("x", 60) + "[label](https://evil.example)" + strings.Repeat("z", 200),
