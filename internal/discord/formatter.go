@@ -63,35 +63,38 @@ func formatRansomwareEmbed(entry model.RansomwareEntry, formatConfig *notifyfmt.
 	// when there is a URL to show and when "website"/"url" is not already
 	// going to be rendered by the operator's own FieldOrder, so neither a
 	// duplicate field nor a placeholder row nobody asked for can appear.
-	if strings.TrimSpace(entry.WebsiteURL) != "" &&
-		!discordRansomwareFieldOrderHasWebsite(formatConfig.FieldOrder) {
-		if field := createRansomwareField(formatfields.FieldWebsite, entry, formatConfig); field != nil {
-			if len(embed.Fields) < discordEmbedFieldLimit && discordEmbedCanAddField(embed, field) {
-				embed.Fields = append(embed.Fields, field)
-			}
-		}
-	}
+	appendRansomwareWebsiteFallback(embed, entry, formatConfig)
 
 	// Add fields based on the format configuration
+	appendConfiguredRansomwareFields(embed, entry, formatConfig)
+	return embed
+}
+
+func appendRansomwareWebsiteFallback(embed *MessageEmbed, entry model.RansomwareEntry, formatConfig *notifyfmt.FormatOptions) {
+	if strings.TrimSpace(entry.WebsiteURL) == "" || discordRansomwareFieldOrderHasWebsite(formatConfig.FieldOrder) {
+		return
+	}
+	field := createRansomwareField(formatfields.FieldWebsite, entry, formatConfig)
+	if field != nil && len(embed.Fields) < discordEmbedFieldLimit && discordEmbedCanAddField(embed, field) {
+		embed.Fields = append(embed.Fields, field)
+	}
+}
+
+func appendConfiguredRansomwareFields(embed *MessageEmbed, entry model.RansomwareEntry, formatConfig *notifyfmt.FormatOptions) {
 	for _, fieldName := range formatConfig.FieldOrder {
 		canonicalFieldName, ok := formatfields.Normalize(fieldName)
 		if !ok {
 			continue
 		}
-		// Create the field for the current entry
 		field := createRansomwareField(canonicalFieldName, entry, formatConfig)
-		if field != nil {
-			if len(embed.Fields) >= discordEmbedFieldLimit {
-				break
-			}
-			if !discordEmbedCanAddField(embed, field) {
-				break
-			}
-			embed.Fields = append(embed.Fields, field)
+		if field == nil {
+			continue
 		}
+		if len(embed.Fields) >= discordEmbedFieldLimit || !discordEmbedCanAddField(embed, field) {
+			break
+		}
+		embed.Fields = append(embed.Fields, field)
 	}
-
-	return embed
 }
 
 // discordRansomwareFieldOrderHasWebsite reports whether the operator's

@@ -762,7 +762,10 @@ func validateStatusRetentionConfig(cfg *Config) error {
 	// both express the same generic "how big / how many / how old may a
 	// rotated file's backups be" question, and there is no reason for the
 	// two files to be allowed different ranges.
-	rot := cfg.StatusRetention.AuditLogRotation
+	return validateAuditLogRotation(cfg.StatusRetention.AuditLogRotation)
+}
+
+func validateAuditLogRotation(rot AuditLogRotationConfig) error {
 	if rot.MaxSizeMB < minLogRotationSizeMB || rot.MaxSizeMB > maxLogRotationSizeMB {
 		return fmt.Errorf("invalid status_retention.audit_log_rotation.max_size_mb: %d (must be %d-%d)", rot.MaxSizeMB, minLogRotationSizeMB, maxLogRotationSizeMB)
 	}
@@ -958,30 +961,12 @@ func validateWebhookFilterScope(name, webhookType string, filters *WebhookFilter
 
 	switch webhookType {
 	case WebhookTypeRansomware:
-		if len(filters.IncludeCategories) > 0 {
-			return fmt.Errorf("webhook %s: include_categories is only supported for RSS webhooks", name)
-		}
-		if len(filters.ExcludeCategories) > 0 {
-			return fmt.Errorf("webhook %s: exclude_categories is only supported for RSS webhooks", name)
+		if err := validateRansomwareWebhookFilterScope(name, filters); err != nil {
+			return err
 		}
 	case WebhookTypeRSS, WebhookTypeGovernment:
-		if len(filters.IncludeGroups) > 0 {
-			return fmt.Errorf("webhook %s: include_groups is only supported for ransomware API webhooks", name)
-		}
-		if len(filters.ExcludeGroups) > 0 {
-			return fmt.Errorf("webhook %s: exclude_groups is only supported for ransomware API webhooks", name)
-		}
-		if len(filters.IncludeCountries) > 0 {
-			return fmt.Errorf("webhook %s: include_countries is only supported for ransomware API webhooks", name)
-		}
-		if len(filters.ExcludeCountries) > 0 {
-			return fmt.Errorf("webhook %s: exclude_countries is only supported for ransomware API webhooks", name)
-		}
-		if len(filters.IncludeActivities) > 0 {
-			return fmt.Errorf("webhook %s: include_activities is only supported for ransomware API webhooks", name)
-		}
-		if len(filters.ExcludeActivities) > 0 {
-			return fmt.Errorf("webhook %s: exclude_activities is only supported for ransomware API webhooks", name)
+		if err := validateRSSWebhookFilterScope(name, filters); err != nil {
+			return err
 		}
 	}
 
@@ -993,6 +978,38 @@ func validateWebhookFilterScope(name, webhookType string, filters *WebhookFilter
 		return err
 	}
 
+	return nil
+}
+
+func validateRansomwareWebhookFilterScope(name string, filters *WebhookFilters) error {
+	if len(filters.IncludeCategories) > 0 {
+		return fmt.Errorf("webhook %s: include_categories is only supported for RSS webhooks", name)
+	}
+	if len(filters.ExcludeCategories) > 0 {
+		return fmt.Errorf("webhook %s: exclude_categories is only supported for RSS webhooks", name)
+	}
+	return nil
+}
+
+func validateRSSWebhookFilterScope(name string, filters *WebhookFilters) error {
+	if len(filters.IncludeGroups) > 0 {
+		return fmt.Errorf("webhook %s: include_groups is only supported for ransomware API webhooks", name)
+	}
+	if len(filters.ExcludeGroups) > 0 {
+		return fmt.Errorf("webhook %s: exclude_groups is only supported for ransomware API webhooks", name)
+	}
+	if len(filters.IncludeCountries) > 0 {
+		return fmt.Errorf("webhook %s: include_countries is only supported for ransomware API webhooks", name)
+	}
+	if len(filters.ExcludeCountries) > 0 {
+		return fmt.Errorf("webhook %s: exclude_countries is only supported for ransomware API webhooks", name)
+	}
+	if len(filters.IncludeActivities) > 0 {
+		return fmt.Errorf("webhook %s: include_activities is only supported for ransomware API webhooks", name)
+	}
+	if len(filters.ExcludeActivities) > 0 {
+		return fmt.Errorf("webhook %s: exclude_activities is only supported for ransomware API webhooks", name)
+	}
 	return nil
 }
 

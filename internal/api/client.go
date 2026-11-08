@@ -95,24 +95,8 @@ func OperatorErrorMessage(err error) string {
 
 	var statusErr *HTTPStatusError
 	if errors.As(err, &statusErr) {
-		switch statusErr.StatusCode {
-		case http.StatusBadRequest:
-			return "API request rejected by provider; check API configuration"
-		case http.StatusUnauthorized, http.StatusForbidden:
-			return "API authentication failed; check api_key and provider access"
-		case http.StatusNotFound:
-			return "API endpoint not found; check provider API compatibility"
-		case http.StatusTooManyRequests:
-			return "API rate limited; retry on next poll"
-		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, http.StatusInternalServerError:
-			return "API provider unavailable; retry on next poll"
-		default:
-			if statusErr.StatusCode >= 400 && statusErr.StatusCode < 500 {
-				return "API request rejected by provider; check API configuration"
-			}
-			if statusErr.StatusCode >= 500 {
-				return "API provider unavailable; retry on next poll"
-			}
+		if message := operatorHTTPStatusMessage(statusErr.StatusCode); message != "" {
+			return message
 		}
 	}
 
@@ -124,6 +108,29 @@ func OperatorErrorMessage(err error) string {
 		return "API response could not be decoded; provider response format may have changed"
 	}
 	return "API request failed; check network connectivity and provider availability"
+}
+
+func operatorHTTPStatusMessage(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "API request rejected by provider; check API configuration"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "API authentication failed; check api_key and provider access"
+	case http.StatusNotFound:
+		return "API endpoint not found; check provider API compatibility"
+	case http.StatusTooManyRequests:
+		return "API rate limited; retry on next poll"
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout, http.StatusInternalServerError:
+		return "API provider unavailable; retry on next poll"
+	default:
+		if statusCode >= 400 && statusCode < 500 {
+			return "API request rejected by provider; check API configuration"
+		}
+		if statusCode >= 500 {
+			return "API provider unavailable; retry on next poll"
+		}
+		return ""
+	}
 }
 
 // Client represents the HTTP client for external APIs
@@ -451,13 +458,7 @@ func (c *Client) makeRequest(ctx context.Context, url string, target interface{}
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("request failed: %w", err)
-			if isRetryableNetworkError(err) {
-				if hasRemainingAPIAttempts(attempt, policy.MaxAttempts) {
-					log.WithFields(log.Fields{
-						"attempt": attempt + 1,
-						"error":   OperatorErrorMessage(err),
-					}).Warn("API request failed, retrying...")
-				}
+			if retryableAPITransportError(err, attempt, policy.MaxAttempts) {
 				continue
 			}
 			return lastErr
@@ -484,6 +485,19 @@ func (c *Client) makeRequest(ctx context.Context, url string, target interface{}
 		return fmt.Errorf("failed after %d attempts: %w", policy.MaxAttempts, lastErr)
 	}
 	return fmt.Errorf("failed after %d attempts (last status: %d): %w", policy.MaxAttempts, lastStatusCode, lastErr)
+}
+
+func retryableAPITransportError(err error, attempt, maxAttempts int) bool {
+	if !isRetryableNetworkError(err) {
+		return false
+	}
+	if hasRemainingAPIAttempts(attempt, maxAttempts) {
+		log.WithFields(log.Fields{
+			"attempt": attempt + 1,
+			"error":   OperatorErrorMessage(err),
+		}).Warn("API request failed, retrying...")
+	}
+	return true
 }
 
 func hasRemainingAPIAttempts(attempt, maxAttempts int) bool {

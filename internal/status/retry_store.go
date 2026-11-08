@@ -1178,46 +1178,10 @@ func (t *Tracker) loadRetryStatus() error {
 		return err
 	}
 
-	sanitized := false
-	for key, item := range loadedStatus.RetryQueue {
-		changedItem := false
-		redacted := textutil.RedactWebhookSecrets(item.LastError)
-		if redacted != item.LastError {
-			item.LastError = redacted
-			sanitized = true
-			changedItem = true
-		}
-		if item.PayloadVersion == "" && item.ItemType == RetryItemTypeAPI.String() && len(item.Payload) > 0 {
-			item.PayloadVersion = RetryPayloadVersionRansomwareEntryV1
-			sanitized = true
-			changedItem = true
-		}
-		if changedItem {
-			loadedStatus.RetryQueue[key] = item
-		}
+	sanitized := sanitizeLoadedRetryQueue(&loadedStatus)
+	if sanitizeLoadedDeadLetters(&loadedStatus) {
+		sanitized = true
 	}
-	seenDeadLetters := make(map[string]bool, len(loadedStatus.DeadLetterItems))
-	dedupedDeadLetters := loadedStatus.DeadLetterItems[:0]
-	for _, item := range loadedStatus.DeadLetterItems {
-		redacted := textutil.RedactWebhookSecrets(item.LastError)
-		if redacted != item.LastError {
-			item.LastError = redacted
-			sanitized = true
-		}
-		key := deadLetterKey(
-			item.ItemKey,
-			retryDestinationIDForPersistence(item.DestinationID),
-			item.Messenger,
-			item.ItemType,
-		)
-		if seenDeadLetters[key] {
-			sanitized = true
-			continue
-		}
-		seenDeadLetters[key] = true
-		dedupedDeadLetters = append(dedupedDeadLetters, item)
-	}
-	loadedStatus.DeadLetterItems = dedupedDeadLetters
 
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
@@ -1239,6 +1203,55 @@ func (t *Tracker) loadRetryStatus() error {
 	}).Info("Retry status loaded from file")
 
 	return nil
+}
+
+func sanitizeLoadedRetryQueue(status *retryStatus) bool {
+	sanitized := false
+	for key, item := range status.RetryQueue {
+		changedItem := false
+		redacted := textutil.RedactWebhookSecrets(item.LastError)
+		if redacted != item.LastError {
+			item.LastError = redacted
+			sanitized = true
+			changedItem = true
+		}
+		if item.PayloadVersion == "" && item.ItemType == RetryItemTypeAPI.String() && len(item.Payload) > 0 {
+			item.PayloadVersion = RetryPayloadVersionRansomwareEntryV1
+			sanitized = true
+			changedItem = true
+		}
+		if changedItem {
+			status.RetryQueue[key] = item
+		}
+	}
+	return sanitized
+}
+
+func sanitizeLoadedDeadLetters(status *retryStatus) bool {
+	sanitized := false
+	seenDeadLetters := make(map[string]bool, len(status.DeadLetterItems))
+	dedupedDeadLetters := status.DeadLetterItems[:0]
+	for _, item := range status.DeadLetterItems {
+		redacted := textutil.RedactWebhookSecrets(item.LastError)
+		if redacted != item.LastError {
+			item.LastError = redacted
+			sanitized = true
+		}
+		key := deadLetterKey(
+			item.ItemKey,
+			retryDestinationIDForPersistence(item.DestinationID),
+			item.Messenger,
+			item.ItemType,
+		)
+		if seenDeadLetters[key] {
+			sanitized = true
+			continue
+		}
+		seenDeadLetters[key] = true
+		dedupedDeadLetters = append(dedupedDeadLetters, item)
+	}
+	status.DeadLetterItems = dedupedDeadLetters
+	return sanitized
 }
 
 func (t *Tracker) removeQueuedDeadLetteredRetryItemsLocked() int {

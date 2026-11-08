@@ -1022,25 +1022,7 @@ func evaluateRSSHealth(cfg *config.Config, tracker *status.Tracker, now time.Tim
 		return rssHealthVerdict{}
 	}
 
-	known, failed := 0, 0
-	firstError := ""
-	var newestSuccess time.Time
-	for _, feedURL := range enabled {
-		info, ok := tracker.GetRSSFeedInfo(feedURL)
-		if !ok {
-			continue
-		}
-		known++
-		if info.LastError != nil {
-			failed++
-			if firstError == "" {
-				firstError = *info.LastError
-			}
-		}
-		if info.LastSuccess != nil && info.LastSuccess.After(newestSuccess) {
-			newestSuccess = *info.LastSuccess
-		}
-	}
+	known, failed, firstError, newestSuccess := rssFeedHealthSummary(tracker, enabled)
 	if known == 0 {
 		return rssNeverPolledVerdict(cfg, msg, enabled, readinessConfirmed)
 	}
@@ -1060,6 +1042,26 @@ func evaluateRSSHealth(cfg *config.Config, tracker *status.Tracker, now time.Tim
 			failed, known, rssLastSuccessText(newestSuccess, msg))}
 	}
 	return rssHealthVerdict{}
+}
+
+func rssFeedHealthSummary(tracker *status.Tracker, enabled []string) (known, failed int, firstError string, newestSuccess time.Time) {
+	for _, feedURL := range enabled {
+		info, ok := tracker.GetRSSFeedInfo(feedURL)
+		if !ok {
+			continue
+		}
+		known++
+		if info.LastError != nil {
+			failed++
+			if firstError == "" {
+				firstError = *info.LastError
+			}
+		}
+		if info.LastSuccess != nil && info.LastSuccess.After(newestSuccess) {
+			newestSuccess = *info.LastSuccess
+		}
+	}
+	return known, failed, firstError, newestSuccess
 }
 
 // readRSSProgressMarker reads the RSS poller's own progress marker, which is

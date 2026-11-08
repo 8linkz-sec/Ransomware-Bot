@@ -1332,92 +1332,81 @@ func (t *Tracker) UpdateFeedStatusWithErrorInfoAndValidators(
 	feedInfo.EntriesFound = entriesFound
 
 	if success {
-		// Update success information
-		feedInfo.LastSuccess = &now
-		feedInfo.LastError = nil
-
-		// Read before the validator update below mutates ETag/LastModified, so
-		// both reflect what this poll was actually conditioned on and against.
-		hadStoredValidator := feedInfo.ETag != "" || feedInfo.LastModified != ""
-		priorETag := feedInfo.ETag
-		priorLastModified := feedInfo.LastModified
-
-		// A 304 need not repeat the validators (RFC 7232 only recommends it): an
-		// empty value means "unchanged", never "dropped". Wiping one stops
-		// conditional polling for good, because GetRSSFeedHTTPValidators drops a
-		// feed once both are empty and every later poll re-downloads the body.
-		if validators.ETag != "" {
-			feedInfo.ETag = validators.ETag
-		}
-		if validators.LastModified != "" {
-			feedInfo.LastModified = validators.LastModified
-		}
-
-		// The guard above means a bogus validator is otherwise never repaired:
-		// an origin that unconditionally matches whatever it is sent produces
-		// this same shape (success, zero entries, no validator fresher than
-		// what is stored) forever, and looks identical to a genuine, healthy
-		// 304. RFC 7232 recommends a 304 repeat the ETag, and real origins
-		// (nginx, Apache, Cloudflare) do, so "no fresh validator" must be
-		// judged by comparing against the stored value, not by testing for an
-		// empty one: an echoed validator, byte-identical to what is already on
-		// file, is not new evidence the conditional exchange is progressing.
-		// Any poll that returns entries, or a validator that genuinely differs
-		// from what was stored, proves the exchange is still working and
-		// resets the streak.
-		freshETag := validators.ETag != "" && validators.ETag != priorETag
-		freshLastModified := validators.LastModified != "" && validators.LastModified != priorLastModified
-		if hadStoredValidator && entriesFound == 0 && !freshETag && !freshLastModified {
-			feedInfo.ConsecutiveNotModified++
-			if feedInfo.ConsecutiveNotModifiedSince == nil {
-				streakStart := now
-				feedInfo.ConsecutiveNotModifiedSince = &streakStart
-			}
-			if now.Sub(*feedInfo.ConsecutiveNotModifiedSince) >= maxConsecutiveNotModifiedDuration {
-				feedInfo.ETag = ""
-				feedInfo.LastModified = ""
-				feedInfo.ConsecutiveNotModified = 0
-				feedInfo.ConsecutiveNotModifiedSince = nil
-				log.WithFields(log.Fields{
-					"feed_url":           textutil.RedactURLCredentials(feedURL),
-					"threshold_duration": maxConsecutiveNotModifiedDuration.String(),
-				}).Warn("RSS feed reported unchanged for too long; forcing an unconditional refetch to recover from a possibly stuck validator")
-			}
-		} else {
-			feedInfo.ConsecutiveNotModified = 0
-			feedInfo.ConsecutiveNotModifiedSince = nil
-		}
-
-		feedInfo.ConsecutiveFailures = 0
-		feedInfo.NextAttemptAfter = nil
-		clearFeedSourceErrorInfo(&feedInfo)
-
-		// Calculate new success rate (simple moving average approach)
-		if exists {
-			feedInfo.SuccessRate = (feedInfo.SuccessRate * 0.9) + (1.0 * 0.1)
-		} else {
-			feedInfo.SuccessRate = 1.0
-		}
+		updateSuccessfulRSSFeedStatus(feedURL, &feedInfo, now, entriesFound, validators, exists)
 	} else {
-		// Update error information
-		errorMsg = textutil.RedactWebhookSecrets(errorMsg)
-		feedInfo.LastError = &errorMsg
-		feedInfo.ConsecutiveFailures++
-		feedInfo.NextAttemptAfter = nextRSSFeedAttemptAfter(now, feedInfo.ConsecutiveFailures)
-		applySourceErrorInfoToFeed(&feedInfo, errorInfo)
-
-		// Calculate new success rate with failure
-		if exists {
-			feedInfo.SuccessRate *= 0.9 // Reduce success rate
-		} else {
-			feedInfo.SuccessRate = 0.0
-		}
+		updateFailedRSSFeedStatus(&feedInfo, now, errorMsg, errorInfo, exists)
 	}
 
 	// Store updated feed info
 	t.rssStatus.Feeds[feedURL] = feedInfo
 	t.rssStatus.LastUpdated = now
 	t.rssDirty = true
+}
+
+func updateSuccessfulRSSFeedStatus(feedURL string, feedInfo *FeedInfo, now time.Time, entriesFound int, validators rss.FeedHTTPValidators, exists bool) {
+	feedInfo.LastSuccess = &now
+	feedInfo.LastError = nil
+	updateRSSFeedValidators(feedURL, feedInfo, now, entriesFound, validators)
+	feedInfo.ConsecutiveFailures = 0
+	feedInfo.NextAttemptAfter = nil
+	clearFeedSourceErrorInfo(feedInfo)
+
+	if exists {
+		feedInfo.SuccessRate = (feedInfo.SuccessRate * 0.9) + (1.0 * 0.1)
+	} else {
+		feedInfo.SuccessRate = 1.0
+	}
+}
+
+func updateRSSFeedValidators(feedURL string, feedInfo *FeedInfo, now time.Time, entriesFound int, validators rss.FeedHTTPValidators) {
+	// Check freshness against the stored values before replacing them. A 304
+	// need not repeat validators; an empty response value means unchanged.
+	hadStoredValidator := feedInfo.ETag != "" || feedInfo.LastModified != ""
+	freshETag := validators.ETag != "" && validators.ETag != feedInfo.ETag
+	freshLastModified := validators.LastModified != "" && validators.LastModified != feedInfo.LastModified
+	if validators.ETag != "" {
+		feedInfo.ETag = validators.ETag
+	}
+	if validators.LastModified != "" {
+		feedInfo.LastModified = validators.LastModified
+	}
+
+	// An origin may echo a stale validator indefinitely. A successful poll
+	// with no entries and no fresher validator advances that recovery streak.
+	if !hadStoredValidator || entriesFound != 0 || freshETag || freshLastModified {
+		feedInfo.ConsecutiveNotModified = 0
+		feedInfo.ConsecutiveNotModifiedSince = nil
+		return
+	}
+	feedInfo.ConsecutiveNotModified++
+	if feedInfo.ConsecutiveNotModifiedSince == nil {
+		streakStart := now
+		feedInfo.ConsecutiveNotModifiedSince = &streakStart
+	}
+	if now.Sub(*feedInfo.ConsecutiveNotModifiedSince) < maxConsecutiveNotModifiedDuration {
+		return
+	}
+	feedInfo.ETag = ""
+	feedInfo.LastModified = ""
+	feedInfo.ConsecutiveNotModified = 0
+	feedInfo.ConsecutiveNotModifiedSince = nil
+	log.WithFields(log.Fields{
+		"feed_url":           textutil.RedactURLCredentials(feedURL),
+		"threshold_duration": maxConsecutiveNotModifiedDuration.String(),
+	}).Warn("RSS feed reported unchanged for too long; forcing an unconditional refetch to recover from a possibly stuck validator")
+}
+
+func updateFailedRSSFeedStatus(feedInfo *FeedInfo, now time.Time, errorMsg string, errorInfo SourceErrorInfo, exists bool) {
+	errorMsg = textutil.RedactWebhookSecrets(errorMsg)
+	feedInfo.LastError = &errorMsg
+	feedInfo.ConsecutiveFailures++
+	feedInfo.NextAttemptAfter = nextRSSFeedAttemptAfter(now, feedInfo.ConsecutiveFailures)
+	applySourceErrorInfoToFeed(feedInfo, errorInfo)
+	if exists {
+		feedInfo.SuccessRate *= 0.9
+	} else {
+		feedInfo.SuccessRate = 0.0
+	}
 }
 
 // GetRSSFeedHTTPValidators returns cached HTTP validators for the requested feeds.
@@ -2238,27 +2227,7 @@ func (t *Tracker) GetUnsentRSSItemsForDestinationFeedType(
 			continue
 		}
 
-		var unsent []StoredRSSEntry
-		migrations := make([]rssSentLegacyMigration, 0)
-		for _, idx := range t.parsedRSSIndexesForFeedScopeReadLocked(feedType, feedURLs) {
-			if idx < 0 || idx >= len(t.rssStatus.ParsedItems) {
-				continue
-			}
-			entry := t.rssStatus.ParsedItems[idx]
-			sent, legacyDestination := t.rssItemSentToDestinationReadLocked(entry.Key, destinationID, legacyDestinations...)
-			if !sent {
-				unsent = append(unsent, cloneStoredRSSEntry(entry))
-				continue
-			}
-			if legacyDestination != "" {
-				migrations = append(migrations, rssSentLegacyMigration{
-					itemKey:           entry.Key,
-					destinationID:     destinationID,
-					legacyDestination: legacyDestination,
-				})
-			}
-		}
-
+		unsent, migrations := t.unsentRSSItemsForFeedScopeReadLocked(destinationID, feedType, feedURLs, legacyDestinations)
 		t.mutex.RUnlock()
 		t.migrateRSSSentLegacyDestinations(migrations)
 
@@ -2267,6 +2236,31 @@ func (t *Tracker) GetUnsentRSSItemsForDestinationFeedType(
 		}).Debug("Retrieved unsent RSS items for webhook")
 		return unsent
 	}
+}
+
+// NOTE: Must be called with t.mutex held for reading and a current parsed index.
+func (t *Tracker) unsentRSSItemsForFeedScopeReadLocked(destinationID, feedType string, feedURLs map[string]struct{}, legacyDestinations []string) ([]StoredRSSEntry, []rssSentLegacyMigration) {
+	var unsent []StoredRSSEntry
+	migrations := make([]rssSentLegacyMigration, 0)
+	for _, idx := range t.parsedRSSIndexesForFeedScopeReadLocked(feedType, feedURLs) {
+		if idx < 0 || idx >= len(t.rssStatus.ParsedItems) {
+			continue
+		}
+		entry := t.rssStatus.ParsedItems[idx]
+		sent, legacyDestination := t.rssItemSentToDestinationReadLocked(entry.Key, destinationID, legacyDestinations...)
+		if !sent {
+			unsent = append(unsent, cloneStoredRSSEntry(entry))
+			continue
+		}
+		if legacyDestination != "" {
+			migrations = append(migrations, rssSentLegacyMigration{
+				itemKey:           entry.Key,
+				destinationID:     destinationID,
+				legacyDestination: legacyDestination,
+			})
+		}
+	}
+	return unsent, migrations
 }
 
 // GetUnsentRSSRecoveryItemsForDestinationFeedType returns unsent RSS recovery
@@ -2298,22 +2292,15 @@ func (t *Tracker) parsedRSSIndexesForFeedScopeReadLocked(feedType string, feedUR
 		return indexes
 	}
 
-	indexes := make([]int, 0)
-	seen := make(map[int]struct{})
-	addIndex := func(idx int) {
-		if idx < 0 || idx >= len(t.rssStatus.ParsedItems) {
-			return
-		}
-		if _, exists := seen[idx]; exists {
-			return
-		}
-		seen[idx] = struct{}{}
-		indexes = append(indexes, idx)
+	indexes := parsedRSSIndexCollector{
+		parsedItems: t.rssStatus.ParsedItems,
+		seen:        make(map[int]struct{}),
+		values:      make([]int, 0),
 	}
 
 	if feedType != "" {
 		for _, idx := range t.parsedFeedTypeIndex[feedType] {
-			addIndex(idx)
+			indexes.add(idx)
 		}
 	}
 	for feedURL := range feedURLs {
@@ -2322,7 +2309,7 @@ func (t *Tracker) parsedRSSIndexesForFeedScopeReadLocked(feedType string, feedUR
 			if entry.FeedType != "" && entry.FeedType != feedType {
 				continue
 			}
-			addIndex(idx)
+			indexes.add(idx)
 		}
 	}
 	if feedType != "" {
@@ -2331,11 +2318,28 @@ func (t *Tracker) parsedRSSIndexesForFeedScopeReadLocked(feedType string, feedUR
 			if _, feedURLMatched := feedURLs[entry.FeedURL]; feedURLMatched {
 				continue
 			}
-			addIndex(idx)
+			indexes.add(idx)
 		}
 	}
-	sort.Ints(indexes)
-	return indexes
+	sort.Ints(indexes.values)
+	return indexes.values
+}
+
+type parsedRSSIndexCollector struct {
+	parsedItems []StoredRSSEntry
+	seen        map[int]struct{}
+	values      []int
+}
+
+func (c *parsedRSSIndexCollector) add(idx int) {
+	if idx < 0 || idx >= len(c.parsedItems) {
+		return
+	}
+	if _, exists := c.seen[idx]; exists {
+		return
+	}
+	c.seen[idx] = struct{}{}
+	c.values = append(c.values, idx)
 }
 
 func (t *Tracker) markRSSParsedFullSortDirtyLocked() {
@@ -2444,30 +2448,70 @@ func (t *Tracker) SavePendingChanges() error {
 	}
 
 	if t.inMemory {
-		if t.parsedSortDirty {
-			t.ensureSorted()
-		} else if t.parsedIndexDirty {
-			t.rebuildParsedIndex()
-		}
-		t.rssDirty = false
-		t.apiDirty = false
-		t.retryStore.dirty = false
+		t.clearInMemoryPendingChangesLocked()
 		t.mutex.Unlock()
 		return nil
 	}
 
-	var apiSnapshot *apiStatus
-	var rssSnapshot *rssStatus
-	var retrySnapshot *retryStatus
+	snapshots := t.takePendingStatusSnapshotsLocked()
+	t.mutex.Unlock()
 
+	var saveErrors []error
+	if snapshots.rss != nil {
+		if err := t.saveRSSStatusSnapshot(snapshots.rss); err != nil {
+			log.WithError(err).Error("Failed to save pending RSS status")
+			saveErrors = append(saveErrors, fmt.Errorf("save pending RSS status: %w", err))
+			t.markDirtyAfterSaveFailure("rss")
+		}
+	}
+
+	if snapshots.api != nil {
+		if err := t.saveAPIStatusSnapshot(snapshots.api); err != nil {
+			log.WithError(err).Error("Failed to save pending API status")
+			saveErrors = append(saveErrors, fmt.Errorf("save pending API status: %w", err))
+			t.markDirtyAfterSaveFailure("api")
+		}
+	}
+
+	if snapshots.retry != nil {
+		if err := t.saveRetryStatusSnapshot(snapshots.retry); err != nil {
+			log.WithError(err).Error("Failed to save pending retry status")
+			saveErrors = append(saveErrors, fmt.Errorf("save pending retry status: %w", err))
+			t.markDirtyAfterSaveFailure("retry")
+		}
+	}
+	return errors.Join(saveErrors...)
+}
+
+// NOTE: Must be called with t.mutex locked.
+func (t *Tracker) clearInMemoryPendingChangesLocked() {
+	if t.parsedSortDirty {
+		t.ensureSorted()
+	} else if t.parsedIndexDirty {
+		t.rebuildParsedIndex()
+	}
+	t.rssDirty = false
+	t.apiDirty = false
+	t.retryStore.dirty = false
+}
+
+type pendingStatusSnapshots struct {
+	api   *apiStatus
+	rss   *rssStatus
+	retry *retryStatus
+}
+
+// NOTE: Must be called with t.mutex locked.
+func (t *Tracker) takePendingStatusSnapshotsLocked() pendingStatusSnapshots {
+	var snapshots pendingStatusSnapshots
 	if t.rssDirty {
 		t.ensureSorted()
-		rssSnapshot = cloneRSSStatus(t.rssStatus)
+		snapshots.rss = cloneRSSStatus(t.rssStatus)
 		t.rssDirty = false
 	}
 	if t.apiDirty {
 		if t.apiLoaded {
-			apiSnapshot = cloneAPIStatus(t.apiStatus)
+			snapshots.api = cloneAPIStatus(t.apiStatus)
 			t.apiDirty = false
 		} else if !t.apiSaveSkipWarned {
 			t.apiSaveSkipWarned = true
@@ -2476,36 +2520,10 @@ func (t *Tracker) SavePendingChanges() error {
 		}
 	}
 	if t.retryStore.dirty {
-		retrySnapshot = cloneRetryStatus(t.retryStore.status)
+		snapshots.retry = cloneRetryStatus(t.retryStore.status)
 		t.retryStore.dirty = false
 	}
-	t.mutex.Unlock()
-
-	var saveErrors []error
-	if rssSnapshot != nil {
-		if err := t.saveRSSStatusSnapshot(rssSnapshot); err != nil {
-			log.WithError(err).Error("Failed to save pending RSS status")
-			saveErrors = append(saveErrors, fmt.Errorf("save pending RSS status: %w", err))
-			t.markDirtyAfterSaveFailure("rss")
-		}
-	}
-
-	if apiSnapshot != nil {
-		if err := t.saveAPIStatusSnapshot(apiSnapshot); err != nil {
-			log.WithError(err).Error("Failed to save pending API status")
-			saveErrors = append(saveErrors, fmt.Errorf("save pending API status: %w", err))
-			t.markDirtyAfterSaveFailure("api")
-		}
-	}
-
-	if retrySnapshot != nil {
-		if err := t.saveRetryStatusSnapshot(retrySnapshot); err != nil {
-			log.WithError(err).Error("Failed to save pending retry status")
-			saveErrors = append(saveErrors, fmt.Errorf("save pending retry status: %w", err))
-			t.markDirtyAfterSaveFailure("retry")
-		}
-	}
-	return errors.Join(saveErrors...)
+	return snapshots
 }
 
 func (t *Tracker) markDirtyAfterSaveFailure(statusType string) {
@@ -2767,29 +2785,7 @@ func (t *Tracker) cleanupRSSItemsSynchronized(events *[]DeliveryAuditEvent, webh
 		return
 	}
 
-	// Remove only the oldest entries that have completed delivery to every
-	// enabled RSS webhook target. If a webhook is in quiet hours or has been
-	// failing, the parsed item remains available for recovery delivery.
-	excessCount := initialParsedCount - retention.MaxRSSParsedItems
-	if excessCount < 0 {
-		excessCount = 0
-	}
-	itemsToRemove := make([]StoredRSSEntry, 0, excessCount)
-	itemsToKeep := make([]StoredRSSEntry, 0, initialParsedCount)
-	now := statusNow()
-
-	for _, item := range t.rssStatus.ParsedItems {
-		removeForCount := excessCount > 0
-		removeForAge := ageCleanupEnabled && storedRSSEntryOlderThan(item, now, retention.RSSParsedMaxAge)
-		if (removeForCount || removeForAge) && t.rssItemSentToAllWebhookURLs(item.Key, requiredWebhookURLs) {
-			itemsToRemove = append(itemsToRemove, item)
-			if removeForCount {
-				excessCount--
-			}
-			continue
-		}
-		itemsToKeep = append(itemsToKeep, item)
-	}
+	itemsToRemove, itemsToKeep := t.selectRSSParsedItemsForRetention(requiredWebhookURLs)
 
 	if len(itemsToRemove) == 0 {
 		if countCleanupNeeded {
@@ -2815,24 +2811,7 @@ func (t *Tracker) cleanupRSSItemsSynchronized(events *[]DeliveryAuditEvent, webh
 	}).Debug("Removing old parsed items")
 
 	// Remove corresponding entries from sent_items to keep lists synchronized.
-	removedSentItemKeys := make(map[string]struct{}, len(itemsToRemove)*2)
-	for _, removedItem := range itemsToRemove {
-		removedSentItemKeys[removedItem.Key] = struct{}{}
-		for _, contentSig := range storedRSSContentSignatures(removedItem) {
-			removedSentItemKeys[contentSig] = struct{}{}
-		}
-	}
-	sentItemsRemoved := 0
-	for compositeKey, sentInfo := range t.rssStatus.SentItems {
-		if _, remove := removedSentItemKeys[sentInfo.ItemKey]; remove {
-			delete(t.rssStatus.SentItems, compositeKey)
-			sentItemsRemoved++
-			log.WithFields(log.Fields{
-				"item_key":      sentInfo.ItemKey,
-				"composite_key": compositeKey,
-			}).Debug("Removed sent_item entry for deleted parsed_item")
-		}
-	}
+	removedSentItemKeys, sentItemsRemoved := t.removeRSSSentMarkersForParsedItems(itemsToRemove)
 	retryItemsRemoved := t.moveRSSRetryRowsForRemovedParsedItemsLocked(events, removedSentItemKeys)
 
 	// Rebuild index after slice modification
@@ -2861,6 +2840,58 @@ func (t *Tracker) cleanupRSSItemsSynchronized(events *[]DeliveryAuditEvent, webh
 			"max_items":          retention.MaxRSSParsedItems,
 		}).Warn("RSS parsed backlog remains above retention cap because older items are not fully delivered")
 	}
+}
+
+// selectRSSParsedItemsForRetention preserves unfinished deliveries so they can
+// still be recovered after a quiet period or a webhook failure.
+// NOTE: Must be called with t.mutex locked.
+func (t *Tracker) selectRSSParsedItemsForRetention(requiredWebhookURLs []string) ([]StoredRSSEntry, []StoredRSSEntry) {
+	retention := t.retention
+	excessCount := len(t.rssStatus.ParsedItems) - retention.MaxRSSParsedItems
+	if excessCount < 0 {
+		excessCount = 0
+	}
+	itemsToRemove := make([]StoredRSSEntry, 0, excessCount)
+	itemsToKeep := make([]StoredRSSEntry, 0, len(t.rssStatus.ParsedItems))
+	now := statusNow()
+	for _, item := range t.rssStatus.ParsedItems {
+		removeForCount := excessCount > 0
+		removeForAge := retention.RSSParsedMaxAge > 0 && storedRSSEntryOlderThan(item, now, retention.RSSParsedMaxAge)
+		if (removeForCount || removeForAge) && t.rssItemSentToAllWebhookURLs(item.Key, requiredWebhookURLs) {
+			itemsToRemove = append(itemsToRemove, item)
+			if removeForCount {
+				excessCount--
+			}
+			continue
+		}
+		itemsToKeep = append(itemsToKeep, item)
+	}
+	return itemsToRemove, itemsToKeep
+}
+
+// removeRSSSentMarkersForParsedItems also removes derived content signatures.
+// NOTE: Must be called with t.mutex locked.
+func (t *Tracker) removeRSSSentMarkersForParsedItems(itemsToRemove []StoredRSSEntry) (map[string]struct{}, int) {
+	removedSentItemKeys := make(map[string]struct{}, len(itemsToRemove)*2)
+	for _, removedItem := range itemsToRemove {
+		removedSentItemKeys[removedItem.Key] = struct{}{}
+		for _, contentSig := range storedRSSContentSignatures(removedItem) {
+			removedSentItemKeys[contentSig] = struct{}{}
+		}
+	}
+	sentItemsRemoved := 0
+	for compositeKey, sentInfo := range t.rssStatus.SentItems {
+		if _, remove := removedSentItemKeys[sentInfo.ItemKey]; !remove {
+			continue
+		}
+		delete(t.rssStatus.SentItems, compositeKey)
+		sentItemsRemoved++
+		log.WithFields(log.Fields{
+			"item_key":      sentInfo.ItemKey,
+			"composite_key": compositeKey,
+		}).Debug("Removed sent_item entry for deleted parsed_item")
+	}
+	return removedSentItemKeys, sentItemsRemoved
 }
 
 func (t *Tracker) moveRSSRetryRowsForRemovedParsedItemsLocked(events *[]DeliveryAuditEvent, removedItemKeys map[string]struct{}) int {
@@ -2902,44 +2933,8 @@ func (t *Tracker) cleanupRSSSentItemsRetentionLocked(events *[]DeliveryAuditEven
 	}
 
 	retention := t.retention
-	removed := 0
-	now := statusNow()
-	if retention.RSSParsedMaxAge > 0 {
-		for compositeKey, sentInfo := range t.rssStatus.SentItems {
-			if _, protected := protectedItemKeys[sentInfo.ItemKey]; protected {
-				continue
-			}
-			if !sentInfo.SentAt.IsZero() && now.Sub(sentInfo.SentAt) > retention.RSSParsedMaxAge {
-				delete(t.rssStatus.SentItems, compositeKey)
-				removed++
-			}
-		}
-	}
-
-	if len(t.rssStatus.SentItems) > retention.MaxRSSSentItems {
-		items := make([]rssSentItemWithTime, 0, len(t.rssStatus.SentItems))
-		for compositeKey, sentInfo := range t.rssStatus.SentItems {
-			if _, protected := protectedItemKeys[sentInfo.ItemKey]; protected {
-				continue
-			}
-			items = append(items, rssSentItemWithTime{
-				compositeKey: compositeKey,
-				sentAt:       sentInfo.SentAt,
-			})
-		}
-		sort.Slice(items, func(i, j int) bool {
-			return statusTimeBefore(items[i].sentAt, items[j].sentAt)
-		})
-
-		removeCount := len(t.rssStatus.SentItems) - retention.MaxRSSSentItems
-		if removeCount > len(items) {
-			removeCount = len(items)
-		}
-		for i := 0; i < removeCount; i++ {
-			delete(t.rssStatus.SentItems, items[i].compositeKey)
-			removed++
-		}
-	}
+	removed := t.removeExpiredRSSSentItemsLocked(protectedItemKeys, statusNow(), retention.RSSParsedMaxAge)
+	removed += t.pruneRSSSentItemsToCapLocked(protectedItemKeys, retention.MaxRSSSentItems)
 
 	if removed > 0 {
 		t.rssDirty = true
@@ -2954,6 +2949,52 @@ func (t *Tracker) cleanupRSSSentItemsRetentionLocked(events *[]DeliveryAuditEven
 		})
 	}
 	return removed
+}
+
+// NOTE: Must be called with t.mutex locked.
+func (t *Tracker) removeExpiredRSSSentItemsLocked(protectedItemKeys map[string]struct{}, now time.Time, maxAge time.Duration) int {
+	if maxAge <= 0 {
+		return 0
+	}
+	removed := 0
+	for compositeKey, sentInfo := range t.rssStatus.SentItems {
+		if _, protected := protectedItemKeys[sentInfo.ItemKey]; protected {
+			continue
+		}
+		if !sentInfo.SentAt.IsZero() && now.Sub(sentInfo.SentAt) > maxAge {
+			delete(t.rssStatus.SentItems, compositeKey)
+			removed++
+		}
+	}
+	return removed
+}
+
+// NOTE: Must be called with t.mutex locked.
+func (t *Tracker) pruneRSSSentItemsToCapLocked(protectedItemKeys map[string]struct{}, maxItems int) int {
+	if len(t.rssStatus.SentItems) <= maxItems {
+		return 0
+	}
+	items := make([]rssSentItemWithTime, 0, len(t.rssStatus.SentItems))
+	for compositeKey, sentInfo := range t.rssStatus.SentItems {
+		if _, protected := protectedItemKeys[sentInfo.ItemKey]; protected {
+			continue
+		}
+		items = append(items, rssSentItemWithTime{
+			compositeKey: compositeKey,
+			sentAt:       sentInfo.SentAt,
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return statusTimeBefore(items[i].sentAt, items[j].sentAt)
+	})
+	removeCount := len(t.rssStatus.SentItems) - maxItems
+	if removeCount > len(items) {
+		removeCount = len(items)
+	}
+	for i := 0; i < removeCount; i++ {
+		delete(t.rssStatus.SentItems, items[i].compositeKey)
+	}
+	return removeCount
 }
 
 type rssSentItemWithTime struct {
@@ -3353,20 +3394,24 @@ func backfillContentSignatureAliasesForSentItem(status *rssStatus, sentInfo rssW
 			continue
 		}
 
-		aliasInfo := sentInfo
-		aliasInfo.ItemKey = contentSignature
-		aliasInfo.DestinationID = deliveryDestinationIDForPersistence(destinationID)
-		if aliasInfo.Title == "" {
-			aliasInfo.Title = item.Title
-		}
-		if aliasInfo.FeedTitle == "" {
-			aliasInfo.FeedTitle = item.FeedTitle
-		}
-		status.SentItems[compositeKey] = aliasInfo
+		status.SentItems[compositeKey] = contentSignatureAliasInfo(sentInfo, item, contentSignature, destinationID)
 		backfilled++
 	}
 
 	return backfilled
+}
+
+func contentSignatureAliasInfo(sentInfo rssWebhookSentInfo, item StoredRSSEntry, contentSignature, destinationID string) rssWebhookSentInfo {
+	aliasInfo := sentInfo
+	aliasInfo.ItemKey = contentSignature
+	aliasInfo.DestinationID = deliveryDestinationIDForPersistence(destinationID)
+	if aliasInfo.Title == "" {
+		aliasInfo.Title = item.Title
+	}
+	if aliasInfo.FeedTitle == "" {
+		aliasInfo.FeedTitle = item.FeedTitle
+	}
+	return aliasInfo
 }
 
 func migrateLegacyRSSProcessedItems(status *rssStatus) int {
