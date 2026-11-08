@@ -9,6 +9,7 @@
 
 ### Improved
 
+- HTML-derived alert text removes invisible word joiners and soft hyphens. An RSS item identified only by its title may be delivered once more after the upgrade if its title contained either character.
 - Shared webhook URLs with three or more destinations no longer replay older alerts when status retention trims sent markers.
 - Discord API alert descriptions now remove HTML tags and decode entities, matching Slack and RSS descriptions.
 - Long Slack messages no longer show broken `&`, `<`, or `>` escapes when shortened.

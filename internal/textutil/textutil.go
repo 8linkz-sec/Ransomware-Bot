@@ -181,12 +181,13 @@ func StripHTML(input string) string {
 	return strings.TrimSpace(text)
 }
 
-// stripInvisibleFormatting removes ZERO WIDTH SPACE (U+200B) and the BOM /
-// ZERO WIDTH NO-BREAK SPACE (U+FEFF) outright, and normalizes the Unicode
-// LINE SEPARATOR (U+2028) and PARAGRAPH SEPARATOR (U+2029) to a plain space.
+// stripInvisibleFormatting removes ZERO WIDTH SPACE (U+200B), WORD JOINER
+// (U+2060), ZERO WIDTH NO-BREAK SPACE (U+FEFF), and SOFT HYPHEN (U+00AD).
+// It normalizes the Unicode LINE SEPARATOR (U+2028) and PARAGRAPH SEPARATOR
+// (U+2029) to a plain space.
 // It is called before the whitespace-collapse pass in StripHTML on purpose:
 // that pass cleans up both the space U+2028/U+2029 turn into and the gap a
-// deleted U+200B/U+FEFF leaves behind, so a run of these next to ordinary
+// deleted formatting marks leave behind, so a run of these next to ordinary
 // spaces collapses to one space instead of surviving as extra whitespace.
 // (Entity decoding is a separate, earlier step in StripHTML, so an
 // entity-encoded form such as "&#x200b;" is already a raw character by the
@@ -206,13 +207,13 @@ func StripHTML(input string) string {
 // was tried on 2026-09-04 and reverted the same day: it corrupted exactly
 // the non-Latin-script and emoji content this bot exists to relay. Their
 // removal was originally motivated by filename spoofing in feed/API text
-// (e.g. "evil<ZWSP>file.exe"); U+200B and U+FEFF above still close that
-// specific case. That motivating set was incomplete anyway -- U+2060 WORD
-// JOINER is a direct substitute for U+200B and still passes through
-// unstripped, as do U+00AD SOFT HYPHEN, U+180E MONGOLIAN VOWEL SEPARATOR,
-// U+034F COMBINING GRAPHEME JOINER and U+200E/U+200F (LTR/RTL MARK); none of
-// these are stripped by this function either, so a spoofed filename using
-// one of them instead of U+200B/U+FEFF would still pass through unchanged.
+// (e.g. "evil<ZWSP>file.exe"). U+2060 has the same no-break effect as U+FEFF;
+// U+00AD is an optional hyphenation point, not a letter. They are removed
+// from this display-text path to close equivalent invisible filename gaps.
+// U+180E is kept because it distinguishes Mongolian word forms; U+034F is
+// kept because it affects canonical combining-mark order and collation.
+// U+200E/U+200F are directional marks, deliberately kept by StripBidiControls
+// to preserve the readability of mixed-direction text.
 //
 // This closes a gap BidiIsolate does not: BidiIsolate (and the
 // StripBidiControls it calls) only strips bidi-control characters
@@ -221,7 +222,7 @@ func StripHTML(input string) string {
 func stripInvisibleFormatting(text string) string {
 	return strings.Map(func(r rune) rune {
 		switch r {
-		case '\u200b', '\ufeff':
+		case '\u00ad', '\u200b', '\u2060', '\ufeff':
 			return -1
 		case '\u2028', '\u2029':
 			return ' '
