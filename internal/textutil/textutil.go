@@ -1436,7 +1436,10 @@ func realAuthorityCandidate(raw string, parsed *url.URL) (scheme, host string, m
 	// it ("/path?redirect=a@b"), which is exactly the shape parsed.Path !=
 	// "" identifies and continues to exclude, preserving the query's usual
 	// protection against an unrelated '@' in a query VALUE (e.g. an email
-	// address). Found by this round's own exhaustive per-byte sweep (see
+	// address). A token-like parsed.Host in "TOKEN/p?x@realhost" consequently
+	// remains visible: it is the URL's actual host, not RFC userinfo, and
+	// scanning the query would also misclassify ordinary query values.
+	// Found by this round's own exhaustive per-byte sweep (see
 	// TESTING.md): a smuggled-via-query shape with no path segment leaked
 	// through both RedactURLCredentials and RedactWebhookSecretsForURL's
 	// marker until this condition was added.
