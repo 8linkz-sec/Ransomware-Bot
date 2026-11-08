@@ -884,6 +884,40 @@ func TestSendRSSEntryToTargetFailsWithoutMessengerDelivery(t *testing.T) {
 	}
 }
 
+func TestSendRSSEntryToTargetReportsSenderFailure(t *testing.T) {
+	s := newTestScheduler(t)
+	sender := &recordingWebhookSender{rssErr: errors.New("provider unavailable")}
+	s.slackWebhookSender = sender
+	entry := rss.Entry{
+		Title:     "Failed delivery",
+		GUID:      "sender-failure-guid",
+		FeedURL:   "https://feeds.test/sender-failure.xml",
+		FeedTitle: "Failure Feed",
+		Published: time.Now().UTC(),
+	}
+	target := webhookTarget{
+		url:           "https://hooks.slack.test/services/sender-failure",
+		destinationID: "slack.rss.general",
+		messenger:     "slack",
+	}
+	item := freshRSSDeliveryItem(entry)
+
+	outcome := s.sendRSSEntryToTarget(t.Context(), s.config, config.FeedTypeGeneral,
+		target, item, rssDeliveryContext{mode: rssDeliveryModeFresh, total: 1})
+	if outcome != rssDeliveryOutcomeFailed {
+		t.Fatalf("sender failure outcome = %v, want failed", outcome)
+	}
+	if got := sender.rssCallCount(); got != 1 {
+		t.Fatalf("RSS sends = %d, want 1", got)
+	}
+	if s.statusTracker.IsRSSItemSentToDestination(item.key, target.destinationID, target.url) {
+		t.Fatal("failed delivery was marked sent")
+	}
+	if queued := s.statusTracker.GetRetryItemsByType(status.RetryItemTypeRSS.String()); len(queued) != 1 {
+		t.Fatalf("queued retries = %d, want 1", len(queued))
+	}
+}
+
 func TestSendRSSEntryToTargetCancelsDuringSendDelay(t *testing.T) {
 	hook := logtest.NewGlobal()
 	defer hook.Reset()
