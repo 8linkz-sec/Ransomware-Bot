@@ -184,6 +184,95 @@ func TestCollectFeedResultsKeepsResultsWhenCycleBudgetExpires(t *testing.T) {
 	}
 }
 
+func TestCollectFeedResultsDropsFeedsCompletedAfterCycleDeadline(t *testing.T) {
+	pool := newWorkerPool(2, NewParser(0, time.Millisecond, time.Minute))
+	deadline := time.Now().Add(-time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	earlyURL := "https://feeds.example/early"
+	atDeadlineURL := "https://feeds.example/at-deadline"
+	lateURL := "https://feeds.example/late"
+	urls := []string{earlyURL, atDeadlineURL, lateURL, "https://feeds.example/pending"}
+	for _, result := range []feedResult{
+		{url: earlyURL, entries: []Entry{{Title: "early"}}, completedAt: deadline.Add(-time.Nanosecond)},
+		{url: atDeadlineURL, entries: []Entry{{Title: "at deadline"}}, completedAt: deadline},
+		{url: lateURL, err: context.DeadlineExceeded, completedAt: deadline.Add(time.Nanosecond)},
+	} {
+		pool.results <- result
+	}
+
+	fr, err := pool.collectFeedResults(ctx, func() {}, urls)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("collectFeedResults() error = %v, want context.DeadlineExceeded", err)
+	}
+	if fr == nil || len(fr.Entries[earlyURL]) != 1 || len(fr.Entries[atDeadlineURL]) != 1 {
+		t.Fatalf("timely feed results missing: %#v", fr)
+	}
+	if _, exists := fr.Entries[lateURL]; exists {
+		t.Fatalf("late feed appears in Entries: %#v", fr.Entries)
+	}
+	if _, exists := fr.FeedErrors[lateURL]; exists {
+		t.Fatalf("late feed appears in FeedErrors: %#v", fr.FeedErrors)
+	}
+}
+
+func TestCollectFeedResultsReceiveChecksCompletionTime(t *testing.T) {
+	pool := newWorkerPool(2, NewParser(0, time.Millisecond, time.Minute))
+	deadline := time.Now().Add(-time.Second)
+	base, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	ctx := deadlineOnlyContext{base} // the result receive wins deterministically
+
+	earlyURL := "https://feeds.example/early"
+	lateURL := "https://feeds.example/late"
+	pool.results <- feedResult{url: earlyURL, entries: []Entry{{Title: "early"}}, completedAt: deadline}
+	pool.results <- feedResult{url: lateURL, entries: []Entry{{Title: "late"}}, completedAt: deadline.Add(time.Nanosecond)}
+
+	fr, err := pool.collectFeedResults(ctx, func() {}, []string{earlyURL, lateURL})
+	if !errors.Is(err, context.DeadlineExceeded) || fr == nil {
+		t.Fatalf("collectFeedResults() = (%#v, %v), want partial results and deadline error", fr, err)
+	}
+	if len(fr.Entries[earlyURL]) != 1 {
+		t.Fatalf("on-time feed missing: %#v", fr.Entries)
+	}
+	if _, exists := fr.Entries[lateURL]; exists {
+		t.Fatalf("late feed appears in Entries: %#v", fr.Entries)
+	}
+}
+
+func TestDrainBufferedResultsUntilSkipsLateCompletions(t *testing.T) {
+	pool := newWorkerPool(2, NewParser(0, time.Millisecond, time.Minute))
+	deadline := time.Now()
+	earlyURL := "https://feeds.example/early"
+	lateURL := "https://feeds.example/late"
+	pool.results <- feedResult{url: earlyURL, entries: []Entry{{Title: "early"}}, completedAt: deadline}
+	pool.results <- feedResult{url: lateURL, err: context.DeadlineExceeded, completedAt: deadline.Add(time.Nanosecond)}
+
+	fr := newFeedResults()
+	if got := pool.drainBufferedResultsUntil(fr, deadline); got != 1 {
+		t.Fatalf("drained = %d, want only the on-time result", got)
+	}
+	if len(fr.Entries[earlyURL]) != 1 {
+		t.Fatalf("on-time feed missing: %#v", fr.Entries)
+	}
+	if _, exists := fr.FeedErrors[lateURL]; exists {
+		t.Fatalf("late feed appears in FeedErrors: %#v", fr.FeedErrors)
+	}
+}
+
+func TestParseFeedJobRecordsCompletionTime(t *testing.T) {
+	pool := newWorkerPool(1, NewParser(0, time.Millisecond, time.Minute))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := time.Now()
+	result := pool.parseFeedJob(ctx, "https://feeds.example/rss")
+	after := time.Now()
+	if result.completedAt.Before(before) || result.completedAt.After(after) {
+		t.Fatalf("completion time = %s, want between %s and %s", result.completedAt, before, after)
+	}
+}
+
 func TestCollectFeedResultsKeepsPartialResultsWhenClosedChannelMeetsDeadline(t *testing.T) {
 	parser := NewParser(0, time.Millisecond, time.Minute)
 	pool := newWorkerPool(2, parser)

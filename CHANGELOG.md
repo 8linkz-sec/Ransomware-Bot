@@ -5,6 +5,7 @@
 ### Improved
 
 - Config reload log lines no longer contain a fingerprint of your API key or webhook URLs.
+- RSS polling leaves feeds that finish after the cycle deadline for the next cycle.
 
 ## 1.2.0 - 2026-09-18
 
