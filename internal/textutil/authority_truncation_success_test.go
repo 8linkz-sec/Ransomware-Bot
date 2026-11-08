@@ -271,17 +271,19 @@ func TestRedactURLCredentialsOrdinaryPathAndQueryWithAtStillExcludesQuery(t *tes
 	}
 }
 
+type authorityQueryBoundaryCase struct {
+	name        string
+	raw         string
+	redactsHost bool
+}
+
 // The path before '?' decides whether the raw last-'@' scan includes the
 // query. In every case net/url reports TOKEN34 as the host, not userinfo.
 // The with-path query cases therefore retain the literal host by policy;
 // scanning those queries would also misclassify ordinary email-like values.
 func TestAuthorityQueryBoundaryPinsBothRedactors(t *testing.T) {
 	const token = "TOKEN34"
-	cases := []struct {
-		name        string
-		raw         string
-		redactsHost bool
-	}{
+	cases := []authorityQueryBoundaryCase{
 		{"query without path", "https://" + token + "?x@real-host.example/p", true},
 		{"query after slash", "https://" + token + "/?x@real-host.example/p", false},
 		{"at in path", "https://" + token + "/p@real-host.example/x", true},
@@ -294,25 +296,27 @@ func TestAuthorityQueryBoundaryPinsBothRedactors(t *testing.T) {
 				t.Fatalf("url.Parse(%q) = %#v, %v; want token as host with no userinfo", tc.raw, parsed, err)
 			}
 			text := "fetch " + tc.raw
-			for name, redact := range map[string]func() string{
-				"generic":  func() string { return RedactURLCredentials(text) },
-				"anchored": func() string { return RedactWebhookSecretsForURL(text, tc.raw) },
-			} {
-				t.Run(name, func(t *testing.T) {
-					got := redact()
-					hostRedacted := !strings.Contains(got, token)
-					if hostRedacted != tc.redactsHost {
-						t.Fatalf("redacted host = %t, want %t: %q", hostRedacted, tc.redactsHost, got)
-					}
-					if tc.redactsHost && !strings.Contains(got, "real-host.example") {
-						t.Fatalf("redaction lost real host: %q", got)
-					}
-					if !tc.redactsHost && name == "generic" && got != text {
-						t.Fatalf("ordinary host/query changed: got %q, want %q", got, text)
-					}
-				})
-			}
+			t.Run("generic", func(t *testing.T) {
+				assertAuthorityQueryBoundaryResult(t, tc, "generic", text, RedactURLCredentials(text), token)
+			})
+			t.Run("anchored", func(t *testing.T) {
+				assertAuthorityQueryBoundaryResult(t, tc, "anchored", text, RedactWebhookSecretsForURL(text, tc.raw), token)
+			})
 		})
+	}
+}
+
+func assertAuthorityQueryBoundaryResult(t *testing.T, tc authorityQueryBoundaryCase, name, text, got, token string) {
+	t.Helper()
+	hostRedacted := !strings.Contains(got, token)
+	if hostRedacted != tc.redactsHost {
+		t.Fatalf("redacted host = %t, want %t: %q", hostRedacted, tc.redactsHost, got)
+	}
+	if tc.redactsHost && !strings.Contains(got, "real-host.example") {
+		t.Fatalf("redaction lost real host: %q", got)
+	}
+	if !tc.redactsHost && name == "generic" && got != text {
+		t.Fatalf("ordinary host/query changed: got %q, want %q", got, text)
 	}
 }
 
