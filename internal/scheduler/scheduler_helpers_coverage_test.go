@@ -550,14 +550,14 @@ func TestRSSDeliveryModeMessages(t *testing.T) {
 		{
 			name:         "cancel",
 			fn:           rssDeliveryCancelMessage,
-			wantFresh:    "Context cancelled, stopping RSS entry send",
-			wantRecovery: "Context cancelled, stopping RSS send",
+			wantFresh:    "Context ended, stopping RSS entry send",
+			wantRecovery: "Context ended, stopping RSS send",
 		},
 		{
 			name:         "delay cancel",
 			fn:           rssDeliveryDelayCancelMessage,
-			wantFresh:    "Context cancelled during RSS send delay",
-			wantRecovery: "Context cancelled during RSS recovery send delay",
+			wantFresh:    "Context ended during RSS send delay",
+			wantRecovery: "Context ended during RSS recovery send delay",
 		},
 		{
 			name:         "filtered",

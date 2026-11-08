@@ -566,7 +566,7 @@ func (s *Scheduler) sendAPIEntriesIndividually(ctx context.Context, entries []mo
 			log.WithFields(log.Fields{
 				"messenger": target.messenger,
 				"sent":      successCount,
-			}).Warn("Context cancelled, stopping API send")
+			}).Warn("Context ended, stopping API send")
 			return
 		default:
 		}
@@ -592,7 +592,7 @@ func (s *Scheduler) sendAPIEntriesIndividually(ctx context.Context, entries []mo
 			log.WithFields(log.Fields{
 				"messenger": target.messenger,
 				"sent":      successCount,
-			}).Warn("Context cancelled during API send delay")
+			}).Warn("Context ended during API send delay")
 			return
 		}
 		key := model.GenerateRansomwareEntryKey(entry)
@@ -636,8 +636,8 @@ func (s *Scheduler) sendAPIEntryToTarget(ctx context.Context, cfg *config.Config
 		sendStarted = true
 		return target.send(ctx, target.url, entry, config.NotificationFormatOptions(&cfg.Format))
 	}); err != nil {
-		if !sendStarted && errors.Is(err, context.Canceled) {
-			log.WithField("destination_id", target.destinationID).Warn("Context cancelled before API webhook send")
+		if !sendStarted && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			log.WithField("destination_id", target.destinationID).Warn("Context ended before API webhook send")
 			return false
 		}
 		log.WithFields(webhookFailureFields(target.messenger, err, log.Fields{
@@ -842,7 +842,7 @@ func (s *Scheduler) processAPIRetryQueue(ctx context.Context, allEntries []model
 		item := retryRecord.Item
 		select {
 		case <-ctx.Done():
-			log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, item.DestinationID, "context_cancelled")).Warn("Context cancelled, stopping API retry queue processing")
+			log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, item.DestinationID, "context_done")).Warn("Context ended, stopping API retry queue processing")
 			return
 		default:
 		}
@@ -1003,7 +1003,7 @@ func (s *Scheduler) processAPIRetryJob(
 	item := job.item
 	select {
 	case <-ctx.Done():
-		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_cancelled")).Warn("Context cancelled, stopping API retry queue processing")
+		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_done")).Warn("Context ended, stopping API retry queue processing")
 		return false
 	default:
 	}
@@ -1018,7 +1018,7 @@ func (s *Scheduler) processAPIRetryJob(
 		return true
 	}
 	if !waitForSendDelay(ctx, delivery.delay) {
-		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_cancelled")).Warn("Context cancelled during API retry send delay")
+		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_done")).Warn("Context ended during API retry send delay")
 		return false
 	}
 	sendStarted := false
@@ -1028,8 +1028,8 @@ func (s *Scheduler) processAPIRetryJob(
 	})
 
 	if err != nil {
-		if !sendStarted && errors.Is(err, context.Canceled) {
-			log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_cancelled")).Warn("Context cancelled before API retry send")
+		if !sendStarted && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_done")).Warn("Context ended before API retry send")
 			return false
 		}
 		log.WithFields(webhookFailureFields(item.Messenger, err, log.Fields{

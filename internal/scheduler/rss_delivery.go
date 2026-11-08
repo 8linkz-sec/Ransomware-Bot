@@ -188,7 +188,7 @@ func (s *Scheduler) sendRSSEntryToTarget(
 		return delivery.sender.SendRSSEntry(ctx, target.url, item.entry, feedType, config.NotificationFormatOptions(&cfg.Format))
 	})
 	if err != nil {
-		if !sendStarted && errors.Is(err, context.Canceled) {
+		if !sendStarted && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 			log.WithField("messenger", messenger).Warn(rssDeliveryCancelMessage(mode))
 			return rssDeliveryOutcomeCanceled
 		}
@@ -229,16 +229,16 @@ func (s *Scheduler) sendRSSEntryToTarget(
 
 func rssDeliveryCancelMessage(mode rssDeliveryMode) string {
 	if mode == rssDeliveryModeRecovery {
-		return "Context cancelled, stopping RSS send"
+		return "Context ended, stopping RSS send"
 	}
-	return "Context cancelled, stopping RSS entry send"
+	return "Context ended, stopping RSS entry send"
 }
 
 func rssDeliveryDelayCancelMessage(mode rssDeliveryMode) string {
 	if mode == rssDeliveryModeRecovery {
-		return "Context cancelled during RSS recovery send delay"
+		return "Context ended during RSS recovery send delay"
 	}
-	return "Context cancelled during RSS send delay"
+	return "Context ended during RSS send delay"
 }
 
 func rssDeliveryFilteredMessage(mode rssDeliveryMode) string {
@@ -824,7 +824,7 @@ func (s *Scheduler) sendRSSItemsToWebhookWithConfig(
 			log.WithFields(log.Fields{
 				"sent":      successCount,
 				"messenger": messenger,
-			}).Warn("Context cancelled, stopping RSS send")
+			}).Warn("Context ended, stopping RSS send")
 			return
 		default:
 		}

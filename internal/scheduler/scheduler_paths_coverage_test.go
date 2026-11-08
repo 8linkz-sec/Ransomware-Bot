@@ -922,7 +922,7 @@ func TestSendRSSEntryToTargetCancelsDuringSendDelay(t *testing.T) {
 	if got := slackSender.rssCallCount(); got != 0 {
 		t.Fatalf("RSS sends = %d, want 0 after cancellation during send delay", got)
 	}
-	if entry := findTestLogEntry(hook, "Context cancelled during RSS send delay"); entry == nil {
+	if entry := findTestLogEntry(hook, "Context ended during RSS send delay"); entry == nil {
 		t.Fatal("missing warn log for cancellation during RSS send delay")
 	}
 }
@@ -984,7 +984,7 @@ func TestSendRSSItemsToWebhookWithConfigStopsOnCancelledContext(t *testing.T) {
 	if got := slackSender.rssCallCount(); got != 0 {
 		t.Fatalf("RSS sends = %d, want 0 with cancelled context", got)
 	}
-	if entry := findTestLogEntry(hook, "Context cancelled, stopping RSS send"); entry == nil {
+	if entry := findTestLogEntry(hook, "Context ended, stopping RSS send"); entry == nil {
 		t.Fatal("missing warn log for cancelled RSS recovery loop")
 	}
 }
@@ -1049,7 +1049,7 @@ func TestSendRSSItemsToWebhookWithConfigReturnsOnDelayCancel(t *testing.T) {
 	if got := slackSender.rssCallCount(); got != 0 {
 		t.Fatalf("RSS sends = %d, want 0 after delay cancellation", got)
 	}
-	if entry := findTestLogEntry(hook, "Context cancelled during RSS recovery send delay"); entry == nil {
+	if entry := findTestLogEntry(hook, "Context ended during RSS recovery send delay"); entry == nil {
 		t.Fatal("missing warn log for cancelled recovery send delay")
 	}
 }
@@ -1426,7 +1426,7 @@ func TestProcessAPIRetryJobStopsWhenCancelledDuringSendDelay(t *testing.T) {
 	if got := slackSender.apiCallCount(); got != 0 {
 		t.Fatalf("API retry sends = %d, want 0 after cancellation during delay", got)
 	}
-	if entry := findTestLogEntry(hook, "Context cancelled during API retry send delay"); entry == nil {
+	if entry := findTestLogEntry(hook, "Context ended during API retry send delay"); entry == nil {
 		t.Fatal("missing warn log for cancelled retry send delay")
 	}
 }
