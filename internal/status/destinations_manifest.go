@@ -85,7 +85,10 @@ func LoadDestinationManifest(dataDir string) (DestinationManifest, bool, error) 
 			missing := reconcilePersistedDestinationHistory(dataDir, DestinationManifest{
 				Version: DestinationManifestVersion, Destinations: map[string]string{},
 			})
-			missing.Unattributed = true // absent manifest cannot prove pruned old bindings
+			if len(missing.UnknownIDs) == 0 && !missing.Unattributed {
+				return DestinationManifest{}, false, nil // poll/feed health alone carries no destination binding
+			}
+			missing.Unattributed = true // surviving markers cannot prove all old bindings
 			return missing, true, nil
 		}
 		return uncertainDestinationManifest(), false, fmt.Errorf("read destination manifest %s: %w", path, err)

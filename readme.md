@@ -366,8 +366,10 @@ To make that mistake impossible to miss, the bot keeps `destinations.json` in `d
 active destination IDs to SHA-256 hashes of their webhook URLs and keeps the last hash for each
 removed ID. It stores hashes only, never a URL or token. It is written on every successful config
 load and created silently on the first start. Keep the file with the status files: deleting it
-loses the exact URL hashes. If status files remain, the bot treats their old destination bindings
-as unknown and requires `--accept-destination-remap` before using new positional IDs.
+loses the exact URL hashes. If sent markers, retries, or dead letters remain, the bot treats their
+old destination bindings as unknown and requires `--accept-destination-remap` before using new
+positional IDs. Unreadable status files also require explicit acceptance. Poll and feed health
+records alone carry no destination binding.
 
 If the URL behind an existing ID has changed since the last run, the bot **refuses to start** and
 logs an ERROR naming the affected IDs, what changed, the consequence, and the way out;

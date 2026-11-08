@@ -849,6 +849,16 @@ func writeMainTestConfig(t *testing.T, configJSON string) string {
 	return configDir
 }
 
+func seedHealthcheckDestinationManifest(t *testing.T, configDir, dataDir string) {
+	t.Helper()
+	cfg, err := config.LoadConfig(configDir)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	cfg.DataDir = dataDir
+	seedDestinationManifest(t, cfg)
+}
+
 func TestCheckConfigRejectsPlaceholderAPIKeyForRansomwareAlerts(t *testing.T) {
 	if os.Getenv("RANSOMWARE_BOT_CHECK_CONFIG_PLACEHOLDER_HELPER") == "1" {
 		os.Args = []string{
@@ -2039,6 +2049,7 @@ func TestRunHealthcheckReportsAPIErrorBeforeRSSVerdict(t *testing.T) {
 			tt.seed(t, dataDir)
 			// Written last so the tracker's own save cannot clobber the seed.
 			writeRSSFeedStatusInto(t, dataDir, totalOutage)
+			seedHealthcheckDestinationManifest(t, configDir, dataDir)
 
 			var out bytes.Buffer
 			code := runHealthcheckMode(rssHealthTestOptions(configDir, dataDir, "en"), &out, i18n.Default())

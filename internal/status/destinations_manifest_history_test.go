@@ -9,6 +9,36 @@ import (
 	"testing"
 )
 
+func TestDestinationManifestMissingWithHealthOnlyStatusIsFresh(t *testing.T) {
+	dir := t.TempDir()
+	tracker, err := NewTracker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.UpdateAPIStatus(false, 0, "provider unavailable")
+	if err := tracker.SavePendingChanges(); err != nil {
+		t.Fatal(err)
+	}
+	manifest, found, err := LoadDestinationManifest(dir)
+	if err != nil || found || manifest.Unattributed || len(manifest.UnknownIDs) != 0 {
+		t.Fatalf("health-only status invented destination history: %+v, found %v, err %v", manifest, found, err)
+	}
+}
+
+func TestDestinationManifestMissingWithUnreadableStatusRequiresAccept(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+string(os.PathSeparator)+statusAPIFileName, []byte("{bad"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, found, err := LoadDestinationManifest(dir)
+	if err != nil || !found || !manifest.Unattributed {
+		t.Fatalf("missing manifest with unreadable status = %+v, found %v, err %v", manifest, found, err)
+	}
+	if diff := DiffDestinationManifest(manifest, map[string]string{"discord.ransomware": hashB}); !diff.HasRemap() {
+		t.Fatalf("unreadable status escaped guard: %+v", diff)
+	}
+}
+
 func TestDestinationManifestMissingWithStatusRequiresAccept(t *testing.T) {
 	dir := t.TempDir()
 	tracker, err := NewTracker(dir)
