@@ -978,6 +978,47 @@ Common setup failures:
 | A file was unexpectedly removed from `logs/` | Before this release, log-rotation cleanup used a wider filename match than its own backup names and could delete an unrelated file that happened to start with the log file's stem and contain its extension (e.g. `bot-notes.log.bak` next to `bot.log`). Fixed as of this release — cleanup now only ever removes files matching its own rotation naming scheme. Avoid naming other files in `logs/` starting with the log file's stem as a precaution on older builds. |
 | `API rate limited; retry after ...` / API polling looks stopped | A 429 from ransomware.live with a `Retry-After` header parks the API client: further ransomware polls return this error immediately, with no network call, until the given deadline. This is by design, not a hang — polling resumes automatically on the next scheduled poll once the deadline passes, no restart needed. `Retry-After` is capped at 60 seconds, so with the default `api_poll_interval` (1 hour) the cooldown is always over long before the next cycle; only a much shorter custom interval can see it span two polls. |
 
+### Check FUSE lock behavior across hosts
+
+The `no_flock` state mentioned above is an internal FUSE connection flag based
+on negotiated locking capabilities (`FUSE_FLOCK_LOCKS` on modern protocol
+versions). It is not a mount option that `/proc/mounts` or
+`/proc/self/mountinfo` can reliably report. When FUSE falls back to local locks,
+two processes on the **same Linux host** can still contend successfully. That
+test does not establish protection between hosts. Mount type alone does not
+establish whether the FUSE server supports remote locks. See the Linux kernel's
+[FUSE initialization](https://github.com/torvalds/linux/blob/master/fs/fuse/inode.c)
+and [flock fallback](https://github.com/torvalds/linux/blob/master/fs/fuse/file.c).
+
+If two Linux hosts use the same shared `data_dir`, test the actual mount with a
+separate probe file while the bot is stopped. Use the path to the **same
+underlying file** on each host; the local paths may differ. On host A:
+
+```sh
+probe=/path/to/shared/data/.ransomware-bot-flock-probe
+touch "$probe"
+exec 9<>"$probe"
+flock -x 9
+# Keep this shell open while testing on host B.
+```
+
+While host A still holds the lock, run on host B:
+
+```sh
+probe=/path/to/shared/data/.ransomware-bot-flock-probe
+flock -n -E 42 "$probe" true
+echo $?
+```
+
+Exit code `42` means host B saw the conflicting lock. Exit code `0` means it
+also acquired the lock; if both paths refer to the same backing file, this
+mount does not protect two hosts from simultaneous writes. Any other result
+is inconclusive; check the error and that both hosts opened the same backing
+file. On host A, release the probe with `flock -u 9` and `exec 9>&-` after
+host B finishes. The `-E 42` conflict code follows the
+[`flock` manual](https://man7.org/linux/man-pages/man1/flock.1.html). Do not
+start two bot instances as the probe.
+
 Use `--dry-run` after config validation to preview formatted messages without
 sending webhooks or modifying status files.
 
