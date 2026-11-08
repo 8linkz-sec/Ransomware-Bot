@@ -160,59 +160,31 @@ func TestRedactWebhookSecretsForURLRedactsPreFragmentTruncatedURLField(t *testin
 // wholesale-redact fallback to do.
 func TestRedactURLErrorSubstringFragmentsGuardBranches(t *testing.T) {
 	const text = `parse "https://host.example.test": invalid port "not-a-secret" after host`
-
-	t.Run("nil err", func(t *testing.T) {
-		if got := redactURLErrorSubstringFragments(text, nil, "secret"); got != text {
-			t.Fatalf("got %q, want text unchanged", got)
-		}
-	})
-	t.Run("empty secret", func(t *testing.T) {
-		err := &url.Error{Op: "parse", URL: "x", Err: errors.New(`invalid port "not-a-secret" after host`)}
-		if got := redactURLErrorSubstringFragments(text, err, ""); got != text {
-			t.Fatalf("got %q, want text unchanged", got)
-		}
-	})
-	t.Run("err not a *url.Error", func(t *testing.T) {
-		if got := redactURLErrorSubstringFragments(text, errors.New("plain error"), "secret"); got != text {
-			t.Fatalf("got %q, want text unchanged", got)
-		}
-	})
-	t.Run("url.Error with nil inner Err", func(t *testing.T) {
-		err := &url.Error{Op: "parse", URL: "x", Err: nil}
-		if got := redactURLErrorSubstringFragments(text, err, "secret"); got != text {
-			t.Fatalf("got %q, want text unchanged", got)
-		}
-	})
-	t.Run("url.Error with empty inner Err text", func(t *testing.T) {
-		err := &url.Error{Op: "parse", URL: "x", Err: errors.New("")}
-		if got := redactURLErrorSubstringFragments(text, err, "secret"); got != text {
-			t.Fatalf("got %q, want text unchanged", got)
-		}
-	})
-	t.Run("empty quoted fragment in detail", func(t *testing.T) {
-		err := &url.Error{Op: "parse", URL: "x", Err: errors.New(`invalid port "" after host`)}
-		got := redactURLErrorSubstringFragments(`parse "x": invalid port "" after host`, err, "secret")
-		want := `parse "x": invalid port "" after host`
-		if got != want {
-			t.Fatalf("got %q, want %q (empty fragment left alone)", got, want)
-		}
-	})
-	t.Run("quoted fragment not a substring of secret", func(t *testing.T) {
-		err := &url.Error{Op: "parse", URL: "x", Err: errors.New(`invalid port "unrelated" after host`)}
-		got := redactURLErrorSubstringFragments(text, err, "secret-does-not-contain-that")
-		if got != text {
-			t.Fatalf("got %q, want text unchanged (fragment not a secret substring)", got)
-		}
-	})
-	t.Run("quoted fragment is a substring of secret", func(t *testing.T) {
-		err := &url.Error{Op: "parse", URL: "x", Err: errors.New(`invalid port ":ABC123" after host`)}
-		in := `parse "x": invalid port ":ABC123" after host`
-		got := redactURLErrorSubstringFragments(in, err, "https://svc:ABC123@host.example.test/rss")
-		want := `parse "x": invalid port "[redacted]" after host`
-		if got != want {
-			t.Fatalf("got %q, want %q", got, want)
-		}
-	})
+	const emptyFragment = `parse "x": invalid port "" after host`
+	const secretFragment = `parse "x": invalid port ":ABC123" after host`
+	cases := []struct {
+		name   string
+		text   string
+		err    error
+		secret string
+		want   string
+	}{
+		{"nil err", text, nil, "secret", text},
+		{"empty secret", text, &url.Error{Op: "parse", URL: "x", Err: errors.New(`invalid port "not-a-secret" after host`)}, "", text},
+		{"err not a *url.Error", text, errors.New("plain error"), "secret", text},
+		{"url.Error with nil inner Err", text, &url.Error{Op: "parse", URL: "x", Err: nil}, "secret", text},
+		{"url.Error with empty inner Err text", text, &url.Error{Op: "parse", URL: "x", Err: errors.New("")}, "secret", text},
+		{"empty quoted fragment in detail", emptyFragment, &url.Error{Op: "parse", URL: "x", Err: errors.New(`invalid port "" after host`)}, "secret", emptyFragment},
+		{"quoted fragment not a substring of secret", text, &url.Error{Op: "parse", URL: "x", Err: errors.New(`invalid port "unrelated" after host`)}, "secret-does-not-contain-that", text},
+		{"quoted fragment is a substring of secret", secretFragment, &url.Error{Op: "parse", URL: "x", Err: errors.New(`invalid port ":ABC123" after host`)}, "https://svc:ABC123@host.example.test/rss", `parse "x": invalid port "[redacted]" after host`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := redactURLErrorSubstringFragments(tc.text, tc.err, tc.secret); got != tc.want {
+				t.Fatalf("redactURLErrorSubstringFragments() = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }
 
 // F1 coverage -- rawWebhookSchemeHost's new last-'@' scan must not regress
