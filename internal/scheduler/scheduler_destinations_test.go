@@ -470,13 +470,28 @@ func writeDestinationConfigDirForTest(t *testing.T, configDir, dataDir string, u
   }
 }`, dataDir, strings.Join(quoted, ", "))
 	generalPath := filepath.Join(configDir, "config_general.json")
-	if err := os.WriteFile(generalPath, []byte(general), 0600); err != nil {
-		t.Fatalf("WriteFile(config_general.json) error = %v", err)
+	// Publish one complete revision: the 5 ms watcher must not observe the
+	// write and mtime update as separate config signatures.
+	tempFile, err := os.CreateTemp(configDir, "config_general-*.tmp")
+	if err != nil {
+		t.Fatalf("CreateTemp(config_general.json) error = %v", err)
+	}
+	tempPath := tempFile.Name()
+	defer func() { _ = os.Remove(tempPath) }()
+	if _, err := tempFile.WriteString(general); err != nil {
+		_ = tempFile.Close()
+		t.Fatalf("Write(config_general.json temp) error = %v", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		t.Fatalf("Close(config_general.json temp) error = %v", err)
 	}
 	// The reloader signature is mtime+size, and a pure reorder keeps the size.
 	stamp := time.Now().Add(time.Duration(len(urls)) * time.Second)
-	if err := os.Chtimes(generalPath, stamp, stamp); err != nil {
+	if err := os.Chtimes(tempPath, stamp, stamp); err != nil {
 		t.Fatalf("Chtimes(config_general.json) error = %v", err)
+	}
+	if err := os.Rename(tempPath, generalPath); err != nil {
+		t.Fatalf("Rename(config_general.json temp) error = %v", err)
 	}
 	// The feeds and format files never change between calls. Rewriting them
 	// anyway would move their mtime and hand the 5 ms reloader two or three
