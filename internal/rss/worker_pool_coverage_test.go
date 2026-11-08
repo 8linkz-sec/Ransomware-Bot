@@ -615,6 +615,27 @@ func TestHandleWorkerPoolTimeoutHonoursBufferedResults(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("handleWorkerPoolTimeout() did not return: the buffered-results drain blocked")
 	}
+	assertBufferedTimeoutResults(t, got, fr, err, urls)
+
+	var timeoutEntry *logrus.Entry
+	for _, entry := range hook.AllEntries() {
+		if strings.Contains(entry.Message, "Worker pool timeout waiting for feed results") {
+			timeoutEntry = entry
+		}
+	}
+	if timeoutEntry == nil {
+		t.Fatal("handleWorkerPoolTimeout() did not log the worker pool timeout")
+	}
+	if got := timeoutEntry.Data["remaining_feeds"]; got != 0 {
+		t.Fatalf("log remaining_feeds = %v, want 0 after every result was drained", got)
+	}
+	if got := timeoutEntry.Data["pending_count"]; got != 0 {
+		t.Fatalf("log pending_count = %v, want 0 after every result was drained", got)
+	}
+}
+
+func assertBufferedTimeoutResults(t *testing.T, got, fr *FeedResults, err error, urls []string) {
+	t.Helper()
 	if err == nil {
 		t.Fatal("handleWorkerPoolTimeout() returned no error, want the batch timeout error")
 	}
@@ -637,22 +658,6 @@ func TestHandleWorkerPoolTimeoutHonoursBufferedResults(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "pending feeds: none") {
 		t.Fatalf("error = %v, want no pending feeds", err)
-	}
-
-	var timeoutEntry *logrus.Entry
-	for _, entry := range hook.AllEntries() {
-		if strings.Contains(entry.Message, "Worker pool timeout waiting for feed results") {
-			timeoutEntry = entry
-		}
-	}
-	if timeoutEntry == nil {
-		t.Fatal("handleWorkerPoolTimeout() did not log the worker pool timeout")
-	}
-	if got := timeoutEntry.Data["remaining_feeds"]; got != 0 {
-		t.Fatalf("log remaining_feeds = %v, want 0 after every result was drained", got)
-	}
-	if got := timeoutEntry.Data["pending_count"]; got != 0 {
-		t.Fatalf("log pending_count = %v, want 0 after every result was drained", got)
 	}
 }
 
