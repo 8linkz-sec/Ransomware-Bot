@@ -25,14 +25,16 @@ func preSenderStopContexts() []struct {
 	name   string
 	new    func(int) context.Context
 	reason string
+	prefix string
 } {
 	return []struct {
 		name   string
 		new    func(int) context.Context
 		reason string
+		prefix string
 	}{
-		{name: "cancel", reason: "context_cancelled", new: func(at int) context.Context { return newDoneCallCancelContext(at) }},
-		{name: "deadline", reason: "context_deadline_exceeded", new: func(at int) context.Context {
+		{name: "cancel", reason: "context_cancelled", prefix: "Context cancelled", new: func(at int) context.Context { return newDoneCallCancelContext(at) }},
+		{name: "deadline", reason: "context_deadline_exceeded", prefix: "Context deadline exceeded", new: func(at int) context.Context {
 			return &doneCallDeadlineContext{newDoneCallCancelContext(at)}
 		}},
 	}
@@ -42,6 +44,8 @@ func TestAPIPreSenderContextEndDoesNotCreateRetryAttempt(t *testing.T) {
 	for _, stop := range preSenderStopContexts() {
 		for _, stopAt := range []int{1, 2} {
 			t.Run(stop.name+"/"+map[int]string{1: "before_lock", 2: "after_lock"}[stopAt], func(t *testing.T) {
+				hook := logtest.NewGlobal()
+				defer hook.Reset()
 				s := newTestScheduler(t)
 				sender := &recordingWebhookSender{}
 				entry := model.RansomwareEntry{ID: "pre-send-cancel", Group: "example", Victim: "Example"}
@@ -55,6 +59,9 @@ func TestAPIPreSenderContextEndDoesNotCreateRetryAttempt(t *testing.T) {
 				if s.sendAPIEntryToTarget(stop.new(stopAt), s.config, entry, target,
 					model.GenerateRansomwareEntryKey(entry), "Example") {
 					t.Fatal("pre-sender context end reported a successful send")
+				}
+				if logEntry := findTestLogEntry(hook, stop.prefix+" before API webhook send"); logEntry == nil {
+					t.Fatalf("missing API pre-sender %s log", stop.name)
 				}
 				if got := sender.apiCallCount(); got != 0 {
 					t.Fatalf("sender calls = %d, want 0", got)
@@ -108,7 +115,7 @@ func TestAPIRetryPreSenderContextEndPreservesAttemptCount(t *testing.T) {
 			if changed {
 				t.Fatal("pre-sender context end changed the retry row")
 			}
-			logEntry := findTestLogEntry(hook, "Context ended before API retry send")
+			logEntry := findTestLogEntry(hook, stop.prefix+" before API retry send")
 			if logEntry == nil || logEntry.Data["skip_reason"] != stop.reason {
 				t.Fatalf("pre-sender skip log = %+v, want reason %q", logEntry, stop.reason)
 			}
@@ -136,6 +143,8 @@ func TestAPIRetryPreSenderContextEndPreservesAttemptCount(t *testing.T) {
 func TestRSSPreSenderContextEndDoesNotCreateRetryAttempt(t *testing.T) {
 	for _, stop := range preSenderStopContexts() {
 		t.Run(stop.name, func(t *testing.T) {
+			hook := logtest.NewGlobal()
+			defer hook.Reset()
 			s := newTestScheduler(t)
 			sender := &recordingWebhookSender{}
 			s.slackWebhookSender = sender
@@ -152,6 +161,9 @@ func TestRSSPreSenderContextEndDoesNotCreateRetryAttempt(t *testing.T) {
 				target, freshRSSDeliveryItem(entry), rssDeliveryContext{mode: rssDeliveryModeFresh, total: 1})
 			if outcome != rssDeliveryOutcomeCanceled {
 				t.Fatalf("RSS outcome = %v, want canceled", outcome)
+			}
+			if logEntry := findTestLogEntry(hook, stop.prefix+", stopping RSS entry send"); logEntry == nil {
+				t.Fatalf("missing RSS pre-sender %s log", stop.name)
 			}
 			if got := sender.rssCallCount(); got != 0 {
 				t.Fatalf("sender calls = %d, want 0", got)

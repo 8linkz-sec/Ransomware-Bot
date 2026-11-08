@@ -549,15 +549,29 @@ func TestRSSDeliveryModeMessages(t *testing.T) {
 	}{
 		{
 			name:         "cancel",
-			fn:           rssDeliveryCancelMessage,
-			wantFresh:    "Context ended, stopping RSS entry send",
-			wantRecovery: "Context ended, stopping RSS send",
+			fn:           func(mode rssDeliveryMode) string { return rssDeliveryCancelMessage(mode, context.Canceled) },
+			wantFresh:    "Context cancelled, stopping RSS entry send",
+			wantRecovery: "Context cancelled, stopping RSS send",
 		},
 		{
 			name:         "delay cancel",
-			fn:           rssDeliveryDelayCancelMessage,
-			wantFresh:    "Context ended during RSS send delay",
-			wantRecovery: "Context ended during RSS recovery send delay",
+			fn:           func(mode rssDeliveryMode) string { return rssDeliveryDelayCancelMessage(mode, context.Canceled) },
+			wantFresh:    "Context cancelled during RSS send delay",
+			wantRecovery: "Context cancelled during RSS recovery send delay",
+		},
+		{
+			name:         "deadline",
+			fn:           func(mode rssDeliveryMode) string { return rssDeliveryCancelMessage(mode, context.DeadlineExceeded) },
+			wantFresh:    "Context deadline exceeded, stopping RSS entry send",
+			wantRecovery: "Context deadline exceeded, stopping RSS send",
+		},
+		{
+			name: "delay deadline",
+			fn: func(mode rssDeliveryMode) string {
+				return rssDeliveryDelayCancelMessage(mode, context.DeadlineExceeded)
+			},
+			wantFresh:    "Context deadline exceeded during RSS send delay",
+			wantRecovery: "Context deadline exceeded during RSS recovery send delay",
 		},
 		{
 			name:         "filtered",
