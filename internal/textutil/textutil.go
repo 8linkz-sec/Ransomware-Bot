@@ -568,6 +568,7 @@ func RedactWebhookSecrets(text string) string {
 	if text == "" {
 		return ""
 	}
+	text = redactUnanchoredURLParseErrorDetails(text)
 
 	redacted := discordWebhookURLRegex.ReplaceAllStringFunc(text, func(match string) string {
 		domain := discordWebhookHost
@@ -585,6 +586,77 @@ func RedactWebhookSecrets(text string) string {
 	})
 
 	return RedactURLCredentials(redacted)
+}
+
+// redactUnanchoredURLParseErrorDetails handles a net/url parse error after its
+// original URL has been reduced to plain text by a caller. Only a quoted URL
+// field whose following detail can be reproduced by url.Parse is trusted as
+// the source of a secret fragment. The field itself is fully masked: without
+// an external anchor, even a parsed host may be a misread credential.
+func redactUnanchoredURLParseErrorDetails(text string) string {
+	var redacted strings.Builder
+	lastCopied := 0
+	for offset := 0; offset < len(text); {
+		start := strings.Index(text[offset:], `parse "`)
+		if start < 0 {
+			break
+		}
+		matchStart := offset + start
+		// A rejected quote pair may contain another complete parse error.
+		// Advance only past this opener until the candidate is verified.
+		offset = matchStart + len(`parse "`)
+		quotedStart := matchStart + len("parse ")
+		quotedEnd := closingQuotedStringIndex(text, quotedStart)
+		if quotedEnd < 0 {
+			break
+		}
+		afterQuoted := quotedEnd + 1
+		if !strings.HasPrefix(text[afterQuoted:], ": ") {
+			continue
+		}
+		quotedURL := text[quotedStart : quotedEnd+1]
+		rawURL, err := strconv.Unquote(quotedURL)
+		scheme, _, hasAuthority := strings.Cut(rawURL, "://")
+		if err != nil || !hasAuthority || (!strings.EqualFold(scheme, "http") && !strings.EqualFold(scheme, "https")) {
+			continue
+		}
+		_, parseErr := url.Parse(rawURL)
+		var urlErr *url.Error
+		if !errors.As(parseErr, &urlErr) || urlErr.Err == nil ||
+			!strings.HasPrefix(text[afterQuoted+2:], urlErr.Err.Error()) {
+			continue
+		}
+		detailEnd := afterQuoted + 2 + len(urlErr.Err.Error())
+		// Mask the quoted URL field before fragment replacement. A quoted
+		// fragment can also occur inside that field when the malformed port
+		// contains adjacent quotes; changing it first would break an exact
+		// whole-field replacement and leave credential-bearing URL pieces.
+		redacted.WriteString(text[lastCopied:matchStart])
+		redacted.WriteString(text[matchStart : quotedStart+1])
+		redacted.WriteString(redactedURLMarker)
+		redacted.WriteString(text[quotedEnd : afterQuoted+2])
+		redacted.WriteString(redactURLErrorSubstringFragments(text[afterQuoted+2:detailEnd], parseErr, rawURL))
+		lastCopied = detailEnd
+		offset = detailEnd
+	}
+	if lastCopied == 0 {
+		return text
+	}
+	redacted.WriteString(text[lastCopied:])
+	return redacted.String()
+}
+
+func closingQuotedStringIndex(text string, start int) int {
+	for i := start + 1; i < len(text); i++ {
+		if text[i] == '\\' {
+			i++
+			continue
+		}
+		if text[i] == '"' {
+			return i
+		}
+	}
+	return -1
 }
 
 // RedactWebhookSecretsForURL redacts standard webhook secrets and additionally
@@ -1448,7 +1520,10 @@ func realAuthorityCandidate(raw string, parsed *url.URL) (scheme, host string, m
 	// it ("/path?redirect=a@b"), which is exactly the shape parsed.Path !=
 	// "" identifies and continues to exclude, preserving the query's usual
 	// protection against an unrelated '@' in a query VALUE (e.g. an email
-	// address). Found by this round's own exhaustive per-byte sweep (see
+	// address). A token-like parsed.Host in "TOKEN/p?x@realhost" consequently
+	// remains visible: it is the URL's actual host, not RFC userinfo, and
+	// scanning the query would also misclassify ordinary query values.
+	// Found by this round's own exhaustive per-byte sweep (see
 	// TESTING.md): a smuggled-via-query shape with no path segment leaked
 	// through both RedactURLCredentials and RedactWebhookSecretsForURL's
 	// marker until this condition was added.

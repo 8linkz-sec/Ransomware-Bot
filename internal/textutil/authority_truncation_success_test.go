@@ -271,6 +271,51 @@ func TestRedactURLCredentialsOrdinaryPathAndQueryWithAtStillExcludesQuery(t *tes
 	}
 }
 
+// The path before '?' decides whether the raw last-'@' scan includes the
+// query. In every case net/url reports TOKEN34 as the host, not userinfo.
+// The with-path query cases therefore retain the literal host by policy;
+// scanning those queries would also misclassify ordinary email-like values.
+func TestAuthorityQueryBoundaryPinsBothRedactors(t *testing.T) {
+	const token = "TOKEN34"
+	cases := []struct {
+		name        string
+		raw         string
+		redactsHost bool
+	}{
+		{"query without path", "https://" + token + "?x@real-host.example/p", true},
+		{"query after slash", "https://" + token + "/?x@real-host.example/p", false},
+		{"at in path", "https://" + token + "/p@real-host.example/x", true},
+		{"query after path", "https://" + token + "/p?x@real-host.example/x", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parsed, err := url.Parse(tc.raw)
+			if err != nil || parsed.Host != token || parsed.User != nil {
+				t.Fatalf("url.Parse(%q) = %#v, %v; want token as host with no userinfo", tc.raw, parsed, err)
+			}
+			text := "fetch " + tc.raw
+			for name, redact := range map[string]func() string{
+				"generic":  func() string { return RedactURLCredentials(text) },
+				"anchored": func() string { return RedactWebhookSecretsForURL(text, tc.raw) },
+			} {
+				t.Run(name, func(t *testing.T) {
+					got := redact()
+					hostRedacted := !strings.Contains(got, token)
+					if hostRedacted != tc.redactsHost {
+						t.Fatalf("redacted host = %t, want %t: %q", hostRedacted, tc.redactsHost, got)
+					}
+					if tc.redactsHost && !strings.Contains(got, "real-host.example") {
+						t.Fatalf("redaction lost real host: %q", got)
+					}
+					if !tc.redactsHost && name == "generic" && got != text {
+						t.Fatalf("ordinary host/query changed: got %q, want %q", got, text)
+					}
+				})
+			}
+		})
+	}
+}
+
 // F6 -- reproduces the exact reported feed-path finding text: a userinfo
 // password containing a literal double quote makes the OLD %q-fragment
 // regex ("[^\"]*") stop at the escaped quote's own second byte instead of
