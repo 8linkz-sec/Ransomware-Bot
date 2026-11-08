@@ -129,7 +129,19 @@ func TestApplyReloadedConfigRejectsDestinationRemap(t *testing.T) {
 	if !reloader.applied {
 		t.Fatal("MarkApplied was not called, so the rejected version would be re-warned every tick")
 	}
+	assertRemapRejectionLog(t, hook)
 
+	after, err := os.ReadFile(status.DestinationManifestPath(dataDir)) //nolint:gosec // temp dir under test control
+	if err != nil {
+		t.Fatalf("ReadFile(manifest) error = %v", err)
+	}
+	if string(after) != string(seeded) {
+		t.Fatal("the manifest was rewritten by a rejected reload")
+	}
+}
+
+func assertRemapRejectionLog(t *testing.T, hook *logtest.Hook) {
+	t.Helper()
 	entry := findTestLogEntry(hook, "Config reload rejected: webhook endpoints were remapped onto existing destination IDs")
 	if entry == nil {
 		t.Fatalf("missing reload rejection WARN; entries=%v", allTestLogMessages(hook))
@@ -147,14 +159,6 @@ func TestApplyReloadedConfigRejectsDestinationRemap(t *testing.T) {
 		if e.Level == log.ErrorLevel {
 			t.Fatalf("unexpected ERROR entry %q; a rejected reload is a WARN", e.Message)
 		}
-	}
-
-	after, err := os.ReadFile(status.DestinationManifestPath(dataDir)) //nolint:gosec // temp dir under test control
-	if err != nil {
-		t.Fatalf("ReadFile(manifest) error = %v", err)
-	}
-	if string(after) != string(seeded) {
-		t.Fatal("the manifest was rewritten by a rejected reload")
 	}
 }
 
@@ -590,11 +594,15 @@ func TestRunConfigWatcherWithRealReloaderRejectsRemapThenAppliesTheFix(t *testin
 	writeDestinationConfigDirForTest(t, configDir, dataDir,
 		loadableURLA, loadableURLB, loadableURLC)
 	waitForTestLogMessage(t, hook, "Config reloaded successfully", 1)
+	assertFixedDestinationRemap(t, s, dataDir, hook, rejection, want)
+}
 
+func assertFixedDestinationRemap(t *testing.T, s *Scheduler, dataDir string, hook *logtest.Hook, rejection string, want map[string]string) {
+	t.Helper()
 	if got := countTestLogMessages(hook, rejection); got != 1 {
 		t.Fatalf("rejection WARN count after the fix = %d, want 1", got)
 	}
-	mapping = apiDeliveryMappingForTest(s)
+	mapping := apiDeliveryMappingForTest(s)
 	want["discord.ransomware.3"] = loadableURLC
 	if !reflect.DeepEqual(mapping, want) {
 		t.Fatalf("delivery mapping after the fix = %v, want %v", mapping, want)
