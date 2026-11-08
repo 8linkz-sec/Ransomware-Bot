@@ -840,7 +840,7 @@ func formatRSSMessage(entry model.RSSEntry, formatConfig *notifyfmt.FormatOption
 	blockView := notifyfmt.BuildRSSView(entry, rssViewOptions(formatConfig, slackRSSHeaderText(formatConfig, feedType), slackFieldTextLimit))
 	return slackMessage{
 		Text:   rssFallbackText(fallbackView, formatConfig, feedType),
-		Blocks: rssSlackBlocks(blockView, formatConfig, feedType),
+		Blocks: rssSlackBlocks(blockView, formatConfig),
 	}
 }
 
@@ -854,12 +854,12 @@ func rssViewOptions(formatConfig *notifyfmt.FormatOptions, titleFallback string,
 	}
 }
 
-func rssSlackBlocks(view notifyfmt.RSSView, formatConfig *notifyfmt.FormatOptions, feedType string) []slackBlock {
+func rssSlackBlocks(view notifyfmt.RSSView, formatConfig *notifyfmt.FormatOptions) []slackBlock {
 	options := rssSlackOptionsFromConfig(formatConfig)
 	fieldOrder := slackRSSFieldOrder(formatConfig)
 	fieldSet := rssFieldSet(fieldOrder)
 
-	return trimSlackBlocks(appendRSSSlackFields(nil, fieldOrder, fieldSet, view, formatConfig, feedType, options))
+	return trimSlackBlocks(appendRSSSlackFields(nil, fieldOrder, fieldSet, view, options))
 }
 
 func rssSlackOptionsFromConfig(formatConfig *notifyfmt.FormatOptions) rssSlackOptions {
@@ -878,8 +878,6 @@ func appendRSSSlackFields(
 	blocks []slackBlock, fieldOrder []string,
 	fieldSet map[string]bool,
 	view notifyfmt.RSSView,
-	formatConfig *notifyfmt.FormatOptions,
-	feedType string,
 	options rssSlackOptions,
 ) []slackBlock {
 	contextAdded := false
@@ -890,8 +888,6 @@ func appendRSSSlackFields(
 			fieldName,
 			fieldSet,
 			view,
-			formatConfig,
-			feedType,
 			options,
 			contextAdded,
 		)
@@ -903,8 +899,6 @@ func appendRSSSlackFieldByName(
 	blocks []slackBlock, fieldName string,
 	fieldSet map[string]bool,
 	view notifyfmt.RSSView,
-	formatConfig *notifyfmt.FormatOptions,
-	feedType string,
 	options rssSlackOptions,
 	contextAdded bool,
 ) ([]slackBlock, bool) {

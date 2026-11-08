@@ -1911,29 +1911,19 @@ func webhookFailureFields(messenger string, err error, fields log.Fields) log.Fi
 }
 
 func (s *Scheduler) recordWebhookDeliveryFailure(
-	itemKey, destinationID, messenger, itemType, title string,
+	req status.RetryRequest,
 	err error,
-	maxAttempts int,
-	retryWindow time.Duration,
-	payload ...[]byte,
 ) {
+	itemKey := req.ItemKey
+	destinationID := req.DestinationID
+	messenger := string(req.Messenger)
+	itemType := string(req.ItemType)
+	title := req.Title
 	message := deliveryStatusMessage(messenger, err)
 	errorInfo := webhookRetryErrorInfo(err)
 	if webhookFailureIsRetryable(err) {
-		req := status.RetryRequest{
-			ItemKey:       itemKey,
-			DestinationID: destinationID,
-			Messenger:     status.Messenger(messenger),
-			ItemType:      status.RetryItemType(itemType),
-			Title:         title,
-			LastError:     message,
-			ErrorInfo:     errorInfo,
-			MaxAttempts:   maxAttempts,
-			RetryWindow:   retryWindow,
-		}
-		if len(payload) > 0 {
-			req.Payload = payload[0]
-		}
+		req.LastError = message
+		req.ErrorInfo = errorInfo
 		s.statusTracker.EnqueueRetryForDestination(req)
 		return
 	}
