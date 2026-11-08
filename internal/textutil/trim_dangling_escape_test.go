@@ -69,42 +69,45 @@ func TestTrimDanglingEscape(t *testing.T) {
 	// occurrence trims the wrong position and fails here. The marker offset is
 	// computed from TruncateMiddle's own arithmetic instead of being searched
 	// for, so the assertion cannot be fooled by the payload's markers.
-	t.Run("truncate middle results", func(t *testing.T) {
-		escaped := ""
-		for _, r := range "xxxx...xxxxxxxxxxxxx[y]zzzz...zzzzzzzzzzzzzz" {
-			switch r {
-			case '[':
-				escaped += `\[`
-			case ']':
-				escaped += `\]`
-			default:
-				escaped += string(r)
-			}
+	t.Run("truncate middle results", assertTrimDanglingEscapeTruncateMiddleResults)
+}
+
+func assertTrimDanglingEscapeTruncateMiddleResults(t *testing.T) {
+	t.Helper()
+	escaped := ""
+	for _, r := range "xxxx...xxxxxxxxxxxxx[y]zzzz...zzzzzzzzzzzzzz" {
+		switch r {
+		case '[':
+			escaped += `\[`
+		case ']':
+			escaped += `\]`
+		default:
+			escaped += string(r)
 		}
-		runeCount := len([]rune(escaped))
-		for budget := 4; budget <= runeCount; budget++ {
-			got := TrimDanglingEscape(TruncateMiddle(escaped, budget))
-			head := got
-			if budget < runeCount {
-				// TruncateMiddle emits PrefixRunes(text, (budget-3)/2) + "..." + suffix.
-				// After the trim the head is at most that long, so take everything
-				// before the marker at that offset.
-				headBudget := (budget - 3) / 2
-				runes := []rune(got)
-				if headBudget > len(runes) {
-					headBudget = len(runes)
-				}
-				head = string(runes[:headBudget])
+	}
+	runeCount := len([]rune(escaped))
+	for budget := 4; budget <= runeCount; budget++ {
+		got := TrimDanglingEscape(TruncateMiddle(escaped, budget))
+		head := got
+		if budget < runeCount {
+			// TruncateMiddle emits PrefixRunes(text, (budget-3)/2) + "..." + suffix.
+			// After the trim the head is at most that long, so take everything
+			// before the marker at that offset.
+			headBudget := (budget - 3) / 2
+			runes := []rune(got)
+			if headBudget > len(runes) {
+				headBudget = len(runes)
 			}
-			if endsOnLiveEscapeForTest(head) {
-				t.Fatalf("TrimDanglingEscape(TruncateMiddle(_, %d)) = %q keeps a dangling backslash before the marker",
-					budget, got)
-			}
-			if endsOnLiveEscapeForTest(got) {
-				t.Fatalf("TrimDanglingEscape(TruncateMiddle(_, %d)) = %q ends on a dangling backslash", budget, got)
-			}
+			head = string(runes[:headBudget])
 		}
-	})
+		if endsOnLiveEscapeForTest(head) {
+			t.Fatalf("TrimDanglingEscape(TruncateMiddle(_, %d)) = %q keeps a dangling backslash before the marker",
+				budget, got)
+		}
+		if endsOnLiveEscapeForTest(got) {
+			t.Fatalf("TrimDanglingEscape(TruncateMiddle(_, %d)) = %q ends on a dangling backslash", budget, got)
+		}
+	}
 }
 
 // TestTrimDanglingEscapeDoesNotTouchDescriptionMarkerBracket pins the load-bearing
