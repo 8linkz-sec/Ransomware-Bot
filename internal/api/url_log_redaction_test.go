@@ -125,28 +125,43 @@ func TestAPIRetryDebugURLFieldRedactsUserinfoAndUnknownQueryValue(t *testing.T) 
 	if !errors.As(err, &dnsErr) || !dnsErr.IsTemporary {
 		t.Fatalf("GetJSON() error = %T (%v), want retryable DNS cause", err, err)
 	}
+	assertAPIRetryDebugURLLogEntries(t, hook.AllEntries())
+}
+
+func assertAPIRetryDebugURLLogEntries(t *testing.T, entries []*log.Entry) {
+	t.Helper()
 	warnFound := false
 	retryFound := false
-	for _, entry := range hook.AllEntries() {
+	for _, entry := range entries {
 		switch entry.Message {
 		case "API request failed, retrying...":
 			warnFound = true
-			if got, want := fmt.Sprint(entry.Data[log.ErrorKey]), "API request failed; check network connectivity and provider availability"; got != want {
-				t.Fatalf("retry warning error = %q, want safe status %q", got, want)
-			}
+			assertAPIRetryWarningError(t, entry)
 		case "Retrying API request":
 			retryFound = true
-			got := fmt.Sprint(entry.Data["url"])
-			if !strings.Contains(got, "api.example.test") {
-				t.Fatalf("retry debug URL field lost safe host context: %s", got)
-			}
-			if strings.Contains(got, "PASS") || strings.Contains(got, "ALTSECRET") {
-				t.Fatalf("retry debug URL field leaked credentials: %s", got)
-			}
+			assertAPIRetryDebugURLField(t, entry)
 		}
 	}
 	if !warnFound || !retryFound {
 		t.Fatalf("expected warning and retry debug entries, got warning=%t retry=%t", warnFound, retryFound)
+	}
+}
+
+func assertAPIRetryWarningError(t *testing.T, entry *log.Entry) {
+	t.Helper()
+	if got, want := fmt.Sprint(entry.Data[log.ErrorKey]), "API request failed; check network connectivity and provider availability"; got != want {
+		t.Fatalf("retry warning error = %q, want safe status %q", got, want)
+	}
+}
+
+func assertAPIRetryDebugURLField(t *testing.T, entry *log.Entry) {
+	t.Helper()
+	got := fmt.Sprint(entry.Data["url"])
+	if !strings.Contains(got, "api.example.test") {
+		t.Fatalf("retry debug URL field lost safe host context: %s", got)
+	}
+	if strings.Contains(got, "PASS") || strings.Contains(got, "ALTSECRET") {
+		t.Fatalf("retry debug URL field leaked credentials: %s", got)
 	}
 }
 
