@@ -101,25 +101,30 @@ func TestRetryAfterDelayIsAlwaysWithinCap(t *testing.T) {
 
 	for _, header := range headers {
 		t.Run(header, func(t *testing.T) {
-			delay, ok := RetryAfterDelay(header, now)
-			if !ok {
-				if delay != 0 {
-					t.Fatalf("RetryAfterDelay(%q) = %v with ok=false, want 0", header, delay)
-				}
-				return
-			}
-			if delay < 0 || delay > MaxRetryAfterDelay {
-				t.Fatalf("RetryAfterDelay(%q) = %v, want within 0-%v", header, delay, MaxRetryAfterDelay)
-			}
-
-			seconds, err := strconv.ParseInt(header, 10, 64)
-			if err != nil {
-				return
-			}
-			if seconds >= capSeconds && delay != MaxRetryAfterDelay {
-				t.Fatalf("RetryAfterDelay(%q) = %v, want the cap %v", header, delay, MaxRetryAfterDelay)
-			}
+			assertRetryAfterWithinCap(t, header, now, capSeconds)
 		})
+	}
+}
+
+func assertRetryAfterWithinCap(t *testing.T, header string, now time.Time, capSeconds int64) {
+	t.Helper()
+	delay, ok := RetryAfterDelay(header, now)
+	if !ok {
+		if delay != 0 {
+			t.Fatalf("RetryAfterDelay(%q) = %v with ok=false, want 0", header, delay)
+		}
+		return
+	}
+	if delay < 0 || delay > MaxRetryAfterDelay {
+		t.Fatalf("RetryAfterDelay(%q) = %v, want within 0-%v", header, delay, MaxRetryAfterDelay)
+	}
+
+	seconds, err := strconv.ParseInt(header, 10, 64)
+	if err != nil {
+		return
+	}
+	if seconds >= capSeconds && delay != MaxRetryAfterDelay {
+		t.Fatalf("RetryAfterDelay(%q) = %v, want the cap %v", header, delay, MaxRetryAfterDelay)
 	}
 }
 
