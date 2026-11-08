@@ -66,19 +66,7 @@ func (s *Scheduler) sendRSSEntryToTarget(
 		return rssDeliveryOutcomeAlreadySent
 	}
 	if s.isRSSItemSentToWebhook(rss.GenerateEntryContentSignatureLookupKeys(item.entry), destinationID, target.url) {
-		if !s.dryRun {
-			markRSSItemDedupedForDestination(s.statusTracker, item.key, item.title, item.feedTitle, destinationID, target.url)
-			s.persistStatus("rss item already sent")
-		}
-		s.recordRSSDeliveryAuditEvent(
-			item,
-			feedType,
-			target,
-			mode,
-			status.DeliveryAuditOutcomeDeduplicated,
-			status.DeliveryAuditReasonAlreadySent,
-			map[string]string{"dedupe_key_type": "content_signature"},
-		)
+		s.recordRSSContentSignatureDedup(item, feedType, target, mode)
 		return rssDeliveryOutcomeAlreadySent
 	}
 
@@ -188,27 +176,7 @@ func (s *Scheduler) sendRSSEntryToTarget(
 		return delivery.sender.SendRSSEntry(ctx, target.url, item.entry, feedType, config.NotificationFormatOptions(&cfg.Format))
 	})
 	if err != nil {
-		if !sendStarted && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			log.WithField("messenger", messenger).Warn(rssDeliveryCancelMessage(mode, err))
-			return rssDeliveryOutcomeCanceled
-		}
-		log.WithFields(webhookFailureFields(messenger, err, log.Fields{
-			"item_key":       item.key,
-			"destination_id": destinationID,
-			"feed_type":      feedType,
-			"feed_url":       textutil.RedactURLCredentials(item.feedURL),
-			"messenger":      messenger,
-		})).Error("Failed to send RSS entry to webhook")
-		s.recordWebhookDeliveryFailure(status.RetryRequest{
-			ItemKey:       item.key,
-			DestinationID: destinationID,
-			Messenger:     status.Messenger(messenger),
-			ItemType:      status.RetryItemType(status.RetryItemTypeRSS.String()),
-			Title:         item.title,
-			MaxAttempts:   cfg.RetryMaxAttempts,
-			RetryWindow:   cfg.RetryWindow,
-		}, err)
-		return rssDeliveryOutcomeFailed
+		return s.rssSendFailureOutcome(cfg, feedType, target, item, mode, sendStarted, err)
 	}
 
 	markRSSItemSentForDestination(s.statusTracker, item.key, item.title, item.feedTitle, destinationID, target.url)
@@ -225,6 +193,60 @@ func (s *Scheduler) sendRSSEntryToTarget(
 	s.statusTracker.RemoveFromRetryQueueByDestination(item.key, destinationID, target.url)
 	s.persistStatus("rss item delivered")
 	return rssDeliveryOutcomeSent
+}
+
+func (s *Scheduler) recordRSSContentSignatureDedup(
+	item rssDeliveryItem,
+	feedType string,
+	target webhookTarget,
+	mode rssDeliveryMode,
+) {
+	if !s.dryRun {
+		markRSSItemDedupedForDestination(s.statusTracker, item.key, item.title, item.feedTitle, targetDestinationID(target), target.url)
+		s.persistStatus("rss item already sent")
+	}
+	s.recordRSSDeliveryAuditEvent(
+		item,
+		feedType,
+		target,
+		mode,
+		status.DeliveryAuditOutcomeDeduplicated,
+		status.DeliveryAuditReasonAlreadySent,
+		map[string]string{"dedupe_key_type": "content_signature"},
+	)
+}
+
+func (s *Scheduler) rssSendFailureOutcome(
+	cfg *config.Config,
+	feedType string,
+	target webhookTarget,
+	item rssDeliveryItem,
+	mode rssDeliveryMode,
+	sendStarted bool,
+	err error,
+) rssDeliveryOutcome {
+	if !sendStarted && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		log.WithField("messenger", target.messenger).Warn(rssDeliveryCancelMessage(mode, err))
+		return rssDeliveryOutcomeCanceled
+	}
+	destinationID := targetDestinationID(target)
+	log.WithFields(webhookFailureFields(target.messenger, err, log.Fields{
+		"item_key":       item.key,
+		"destination_id": destinationID,
+		"feed_type":      feedType,
+		"feed_url":       textutil.RedactURLCredentials(item.feedURL),
+		"messenger":      target.messenger,
+	})).Error("Failed to send RSS entry to webhook")
+	s.recordWebhookDeliveryFailure(status.RetryRequest{
+		ItemKey:       item.key,
+		DestinationID: destinationID,
+		Messenger:     status.Messenger(target.messenger),
+		ItemType:      status.RetryItemType(status.RetryItemTypeRSS.String()),
+		Title:         item.title,
+		MaxAttempts:   cfg.RetryMaxAttempts,
+		RetryWindow:   cfg.RetryWindow,
+	}, err)
+	return rssDeliveryOutcomeFailed
 }
 
 func rssDeliveryCancelMessage(mode rssDeliveryMode, err error) string {
