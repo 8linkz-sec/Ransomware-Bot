@@ -183,10 +183,7 @@ func (wp *workerPool) collectFeedResults(
 		select {
 		case result, ok := <-wp.results:
 			if !ok {
-				if err := ctx.Err(); err != nil {
-					return resultsOnContextError(fr, err)
-				}
-				return handleResultsChannelClosed(fr, feedURLs, i)
+				return resultsOnClosedFeedChannel(ctx, fr, feedURLs, i)
 			}
 			if !feedResultWithinDeadline(result, deadline) {
 				// The result itself missed the caller's budget. Keep any other
@@ -208,6 +205,13 @@ func (wp *workerPool) collectFeedResults(
 
 	logFeedErrorSummary(fr.FeedErrors)
 	return fr, nil
+}
+
+func resultsOnClosedFeedChannel(ctx context.Context, fr *FeedResults, feedURLs []string, received int) (*FeedResults, error) {
+	if err := ctx.Err(); err != nil {
+		return resultsOnContextError(fr, err)
+	}
+	return handleResultsChannelClosed(fr, feedURLs, received)
 }
 
 // resultsOnContextError decides what a context error hands back to the caller.

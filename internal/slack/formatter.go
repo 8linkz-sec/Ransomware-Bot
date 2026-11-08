@@ -135,35 +135,42 @@ func slackRansomwareFieldOrderHasWebsite(fieldOrder []string) bool {
 }
 
 func slackFieldOrderWithWebsiteFallback(fieldOrder []string, formatConfig *notifyfmt.FormatOptions) []string {
-	insertAt := 0
-	if formatConfig != nil {
-		websiteAt := -1
-		for i, field := range formatConfig.FieldOrder {
-			if canonical, ok := formatfields.Normalize(field); ok && canonical == formatfields.FieldWebsite {
-				websiteAt = i
-				break
-			}
-		}
-		if websiteAt > 0 {
-			for _, predecessor := range formatConfig.FieldOrder[:websiteAt] {
-				canonical, ok := formatfields.Normalize(predecessor)
-				if !ok {
-					continue
-				}
-				for i, field := range fieldOrder {
-					if shared, ok := formatfields.Normalize(field); ok && shared == canonical {
-						insertAt = i + 1
-						break
-					}
-				}
-			}
-		}
-	}
-
+	insertAt := slackWebsiteFallbackInsertAt(fieldOrder, formatConfig)
 	withWebsite := make([]string, 0, len(fieldOrder)+1)
 	withWebsite = append(withWebsite, fieldOrder[:insertAt]...)
 	withWebsite = append(withWebsite, formatfields.FieldWebsite)
 	return append(withWebsite, fieldOrder[insertAt:]...)
+}
+
+func slackWebsiteFallbackInsertAt(fieldOrder []string, formatConfig *notifyfmt.FormatOptions) int {
+	if formatConfig == nil {
+		return 0
+	}
+	websiteAt := slackFirstFieldIndex(formatConfig.FieldOrder, formatfields.FieldWebsite)
+	if websiteAt <= 0 {
+		return 0
+	}
+
+	insertAt := 0
+	for _, predecessor := range formatConfig.FieldOrder[:websiteAt] {
+		canonical, ok := formatfields.Normalize(predecessor)
+		if !ok {
+			continue
+		}
+		if sharedAt := slackFirstFieldIndex(fieldOrder, canonical); sharedAt >= 0 {
+			insertAt = sharedAt + 1
+		}
+	}
+	return insertAt
+}
+
+func slackFirstFieldIndex(fieldOrder []string, target string) int {
+	for i, field := range fieldOrder {
+		if canonical, ok := formatfields.Normalize(field); ok && canonical == target {
+			return i
+		}
+	}
+	return -1
 }
 
 func appendRansomwareHeaderBlock(
