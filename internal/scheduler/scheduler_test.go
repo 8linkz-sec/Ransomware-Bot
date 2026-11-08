@@ -3293,9 +3293,10 @@ func TestCheckRSSOnceUsesConditionalRSSHTTPValidators(t *testing.T) {
 	guid := "conditional-rss-cache"
 	link := "https://example.test/articles/conditional-rss-cache"
 	lastModified := "Wed, 21 Oct 2015 07:28:00 GMT"
+	feed := conditionalRSSValidatorFeed{title: title, guid: guid, link: link, lastModified: lastModified}
 	var feedRequests atomic.Int32
 	feedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveConditionalRSSValidatorRequest(t, w, r, feedRequests.Add(1), title, guid, link, lastModified)
+		serveConditionalRSSValidatorRequest(t, w, r, feedRequests.Add(1), feed)
 	}))
 	defer feedServer.Close()
 	allowLocalRSSFeedsForTest(t, s.rssParser, feedServer.Client())
@@ -3330,7 +3331,14 @@ func TestCheckRSSOnceUsesConditionalRSSHTTPValidators(t *testing.T) {
 	}
 }
 
-func serveConditionalRSSValidatorRequest(t *testing.T, w http.ResponseWriter, r *http.Request, requestNumber int32, title, guid, link, lastModified string) {
+type conditionalRSSValidatorFeed struct {
+	title        string
+	guid         string
+	link         string
+	lastModified string
+}
+
+func serveConditionalRSSValidatorRequest(t *testing.T, w http.ResponseWriter, r *http.Request, requestNumber int32, feed conditionalRSSValidatorFeed) {
 	t.Helper()
 	switch requestNumber {
 	case 1:
@@ -3342,17 +3350,17 @@ func serveConditionalRSSValidatorRequest(t *testing.T, w http.ResponseWriter, r 
 		}
 		w.Header().Set("Content-Type", "application/rss+xml")
 		w.Header().Set("ETag", `"rss-v1"`)
-		w.Header().Set("Last-Modified", lastModified)
-		_, _ = fmt.Fprint(w, schedulerRSSFeedXMLForTest(title, guid, link))
+		w.Header().Set("Last-Modified", feed.lastModified)
+		_, _ = fmt.Fprint(w, schedulerRSSFeedXMLForTest(feed.title, feed.guid, feed.link))
 	case 2:
 		if got := r.Header.Get("If-None-Match"); got != `"rss-v1"` {
 			t.Errorf("second If-None-Match = %q, want cached etag", got)
 		}
-		if got := r.Header.Get("If-Modified-Since"); got != lastModified {
-			t.Errorf("second If-Modified-Since = %q, want %q", got, lastModified)
+		if got := r.Header.Get("If-Modified-Since"); got != feed.lastModified {
+			t.Errorf("second If-Modified-Since = %q, want %q", got, feed.lastModified)
 		}
 		w.Header().Set("ETag", `"rss-v1"`)
-		w.Header().Set("Last-Modified", lastModified)
+		w.Header().Set("Last-Modified", feed.lastModified)
 		w.WriteHeader(http.StatusNotModified)
 	default:
 		t.Errorf("unexpected feed request")
