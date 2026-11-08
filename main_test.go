@@ -1769,34 +1769,13 @@ func TestRunHealthcheckFailsWhenAllRSSFeedsFailed(t *testing.T) {
 			if code := runHealthcheckMode(rssHealthTestOptions(configDir, dataDir, tt.locale), &out, msg); code != 1 {
 				t.Fatalf("runHealthcheckMode() = %d, want 1; output:\n%s", code, out.String())
 			}
-			for _, want := range tt.want {
-				if !strings.Contains(out.String(), want) {
-					t.Fatalf("healthcheck output missing %q:\n%s", want, out.String())
-				}
-			}
-			for _, forbidden := range []string{rssHealthFeedA, rssHealthFeedB, "feed-a.example.com", "feed-b.example.com"} {
-				if strings.Contains(out.String(), forbidden) {
-					t.Fatalf("healthcheck output leaked %q:\n%s", forbidden, out.String())
-				}
-			}
+			assertHealthcheckOutputContains(t, out.String(), tt.want)
+			assertHealthcheckOutputOmits(t, out.String(), []string{rssHealthFeedA, rssHealthFeedB, "feed-a.example.com", "feed-b.example.com"})
 
 			// The printed error is byte-equal to the stored FeedInfo.LastError:
 			// the healthcheck forwards the operator message the log already
 			// emits and never re-formats it.
-			tracker, err := status.NewReadOnlyTracker(dataDir)
-			if err != nil {
-				t.Fatalf("NewReadOnlyTracker() error = %v", err)
-			}
-			info, ok := tracker.GetRSSFeedInfo(rssHealthFeedA)
-			if !ok || info.LastError == nil {
-				t.Fatalf("GetRSSFeedInfo(%q) = (%+v, %t), want a stored LastError", rssHealthFeedA, info, ok)
-			}
-			if *info.LastError != seededError {
-				t.Fatalf("stored LastError = %q, want %q", *info.LastError, seededError)
-			}
-			if !strings.Contains(out.String(), *info.LastError) {
-				t.Fatalf("healthcheck output does not carry the stored LastError %q:\n%s", *info.LastError, out.String())
-			}
+			assertStoredRSSLastErrorForwarded(t, dataDir, out.String(), seededError)
 		})
 	}
 }
@@ -1846,16 +1825,8 @@ func TestRunHealthcheckFailsWhenNoRecentRSSSuccess(t *testing.T) {
 			if code := runHealthcheckMode(rssHealthTestOptions(configDir, dataDir, tt.locale), &out, msg); code != 1 {
 				t.Fatalf("runHealthcheckMode() = %d, want 1; output:\n%s", code, out.String())
 			}
-			for _, want := range tt.want {
-				if !strings.Contains(out.String(), want) {
-					t.Fatalf("healthcheck output missing %q:\n%s", want, out.String())
-				}
-			}
-			for _, forbidden := range []string{rssHealthFeedA, rssHealthFeedB} {
-				if strings.Contains(out.String(), forbidden) {
-					t.Fatalf("healthcheck output leaked %q:\n%s", forbidden, out.String())
-				}
-			}
+			assertHealthcheckOutputContains(t, out.String(), tt.want)
+			assertHealthcheckOutputOmits(t, out.String(), []string{rssHealthFeedA, rssHealthFeedB})
 		})
 	}
 }
@@ -1905,20 +1876,48 @@ func TestRunHealthcheckWarnsWhenSingleRSSFeedFailed(t *testing.T) {
 				t.Fatalf("runHealthcheckMode() = %d, want 0; output:\n%s", code, out.String())
 			}
 			output := out.String()
-			for _, want := range []string{tt.validText, tt.wantWarn} {
-				if !strings.Contains(output, want) {
-					t.Fatalf("healthcheck output missing %q:\n%s", want, output)
-				}
-			}
+			assertHealthcheckOutputContains(t, output, []string{tt.validText, tt.wantWarn})
 			if strings.Index(output, tt.wantWarn) < strings.Index(output, tt.itemsLine) {
 				t.Fatalf("degraded line must follow %q:\n%s", tt.itemsLine, output)
 			}
-			for _, forbidden := range []string{rssHealthFeedA, rssHealthFeedB} {
-				if strings.Contains(output, forbidden) {
-					t.Fatalf("healthcheck output leaked %q:\n%s", forbidden, output)
-				}
-			}
+			assertHealthcheckOutputOmits(t, output, []string{rssHealthFeedA, rssHealthFeedB})
 		})
+	}
+}
+
+func assertHealthcheckOutputContains(t *testing.T, output string, wants []string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(output, want) {
+			t.Fatalf("healthcheck output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func assertHealthcheckOutputOmits(t *testing.T, output string, forbiddenParts []string) {
+	t.Helper()
+	for _, forbidden := range forbiddenParts {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("healthcheck output leaked %q:\n%s", forbidden, output)
+		}
+	}
+}
+
+func assertStoredRSSLastErrorForwarded(t *testing.T, dataDir, output, seededError string) {
+	t.Helper()
+	tracker, err := status.NewReadOnlyTracker(dataDir)
+	if err != nil {
+		t.Fatalf("NewReadOnlyTracker() error = %v", err)
+	}
+	info, ok := tracker.GetRSSFeedInfo(rssHealthFeedA)
+	if !ok || info.LastError == nil {
+		t.Fatalf("GetRSSFeedInfo(%q) = (%+v, %t), want a stored LastError", rssHealthFeedA, info, ok)
+	}
+	if *info.LastError != seededError {
+		t.Fatalf("stored LastError = %q, want %q", *info.LastError, seededError)
+	}
+	if !strings.Contains(output, *info.LastError) {
+		t.Fatalf("healthcheck output does not carry the stored LastError %q:\n%s", *info.LastError, output)
 	}
 }
 
