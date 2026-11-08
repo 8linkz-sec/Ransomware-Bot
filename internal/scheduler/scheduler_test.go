@@ -7534,51 +7534,52 @@ func TestSendParsedRSSToWebhooksGenuineSendPersistsUnflagged(t *testing.T) {
 		t.Fatalf("SavePendingChanges() error = %v", err)
 	}
 
-	assertGenuineRows := func(label, itemKey string) {
-		t.Helper()
-		rows := persistedRSSSentRowsForTest(t, s.config.DataDir, itemKey)
-		if len(rows) != 2 {
-			t.Fatalf("%s persisted rows = %d, want the stable destination row and the legacy webhook-URL alias", label, len(rows))
-		}
-		for _, row := range rows {
-			if _, flagged := row["derived"]; flagged {
-				t.Fatalf("%s row carries a derived key, genuine sends must persist byte-identically: %#v", label, row)
-			}
-			if _, flagged := row["skipped"]; flagged {
-				t.Fatalf("%s row carries a skipped key, genuine sends must persist byte-identically: %#v", label, row)
-			}
-			if row["title"] != entryA.Title || row["feed_title"] != entryA.FeedTitle {
-				t.Fatalf("%s row lost the delivered entry's titles: %#v", label, row)
-			}
-		}
-	}
-	assertGenuineRows("genuine item key", rss.GenerateEntryKeyForEntry(entryA))
-	assertGenuineRows("genuine content signature", contentSig)
+	assertGenuineRSSSentRows(t, s.config.DataDir, "genuine item key", rss.GenerateEntryKeyForEntry(entryA), entryA)
+	assertGenuineRSSSentRows(t, s.config.DataDir, "genuine content signature", contentSig, entryA)
+	assertDerivedRSSSentRows(t, s.config.DataDir, entryB)
+	assertDerivedRSSSentRows(t, s.config.DataDir, entryC)
+}
 
-	assertDerivedRows := func(entry rss.Entry) {
-		t.Helper()
-		itemKey := rss.GenerateEntryKeyForEntry(entry)
-		rows := persistedRSSSentRowsForTest(t, s.config.DataDir, itemKey)
-		if len(rows) != 2 {
-			t.Fatalf("suppressed %s rows = %d, want the stable destination row and the legacy webhook-URL alias", entry.FeedTitle, len(rows))
+func assertGenuineRSSSentRows(t *testing.T, dataDir, label, itemKey string, delivered rss.Entry) {
+	t.Helper()
+	rows := persistedRSSSentRowsForTest(t, dataDir, itemKey)
+	if len(rows) != 2 {
+		t.Fatalf("%s persisted rows = %d, want the stable destination row and the legacy webhook-URL alias", label, len(rows))
+	}
+	for _, row := range rows {
+		if _, flagged := row["derived"]; flagged {
+			t.Fatalf("%s row carries a derived key, genuine sends must persist byte-identically: %#v", label, row)
 		}
-		for _, row := range rows {
-			if row["derived"] != true {
-				t.Fatalf("suppressed %s row is not flagged derived: %#v", entry.FeedTitle, row)
-			}
-			if _, flagged := row["skipped"]; flagged {
-				t.Fatalf("suppressed %s row reuses the filter-mismatch skipped flag: %#v", entry.FeedTitle, row)
-			}
-			// The suppressed entry keeps its OWN titles, not the delivered
-			// entry's: the article titles coincide because the fixture shares
-			// them, the feed titles do not.
-			if row["title"] != entry.Title || row["feed_title"] != entry.FeedTitle {
-				t.Fatalf("suppressed %s row lost its own titles: %#v", entry.FeedTitle, row)
-			}
+		if _, flagged := row["skipped"]; flagged {
+			t.Fatalf("%s row carries a skipped key, genuine sends must persist byte-identically: %#v", label, row)
+		}
+		if row["title"] != delivered.Title || row["feed_title"] != delivered.FeedTitle {
+			t.Fatalf("%s row lost the delivered entry's titles: %#v", label, row)
 		}
 	}
-	assertDerivedRows(entryB)
-	assertDerivedRows(entryC)
+}
+
+func assertDerivedRSSSentRows(t *testing.T, dataDir string, entry rss.Entry) {
+	t.Helper()
+	itemKey := rss.GenerateEntryKeyForEntry(entry)
+	rows := persistedRSSSentRowsForTest(t, dataDir, itemKey)
+	if len(rows) != 2 {
+		t.Fatalf("suppressed %s rows = %d, want the stable destination row and the legacy webhook-URL alias", entry.FeedTitle, len(rows))
+	}
+	for _, row := range rows {
+		if row["derived"] != true {
+			t.Fatalf("suppressed %s row is not flagged derived: %#v", entry.FeedTitle, row)
+		}
+		if _, flagged := row["skipped"]; flagged {
+			t.Fatalf("suppressed %s row reuses the filter-mismatch skipped flag: %#v", entry.FeedTitle, row)
+		}
+		// The suppressed entry keeps its OWN titles, not the delivered
+		// entry's: the article titles coincide because the fixture shares
+		// them, the feed titles do not.
+		if row["title"] != entry.Title || row["feed_title"] != entry.FeedTitle {
+			t.Fatalf("suppressed %s row lost its own titles: %#v", entry.FeedTitle, row)
+		}
+	}
 }
 
 // TestSendParsedRSSToWebhooksSignatureAnchorIsNotRenewedByASuppression is the
@@ -7695,28 +7696,32 @@ func TestSendParsedRSSToWebhooksSignatureHitAuditUnchanged(t *testing.T) {
 
 			tt.seed(t, s, targets, entryA, server.URL, destinationID)
 			sendReanchorVariantForTest(t, s, targets, entryB)
-
-			wantDetails := map[string]string{"dedupe_key_type": "content_signature", "mode": "fresh"}
-			matched := 0
-			for _, event := range deliveryAuditEventsForTest(t, s.config.DataDir) {
-				if event.ItemKey != keyB {
-					continue
-				}
-				if event.Outcome != status.DeliveryAuditOutcomeDeduplicated ||
-					event.Reason != status.DeliveryAuditReasonAlreadySent {
-					t.Fatalf("suppressed entry audit event = %s/%s, want %s/%s",
-						event.Outcome, event.Reason,
-						status.DeliveryAuditOutcomeDeduplicated, status.DeliveryAuditReasonAlreadySent)
-				}
-				if !reflect.DeepEqual(event.Details, wantDetails) {
-					t.Fatalf("audit details = %#v, want exactly %#v", event.Details, wantDetails)
-				}
-				matched++
-			}
-			if matched != 1 {
-				t.Fatalf("deduplicated audit events for the suppressed entry = %d, want 1", matched)
-			}
+			assertRSSSignatureHitAudit(t, s.config.DataDir, keyB)
 		})
+	}
+}
+
+func assertRSSSignatureHitAudit(t *testing.T, dataDir, itemKey string) {
+	t.Helper()
+	wantDetails := map[string]string{"dedupe_key_type": "content_signature", "mode": "fresh"}
+	matched := 0
+	for _, event := range deliveryAuditEventsForTest(t, dataDir) {
+		if event.ItemKey != itemKey {
+			continue
+		}
+		if event.Outcome != status.DeliveryAuditOutcomeDeduplicated ||
+			event.Reason != status.DeliveryAuditReasonAlreadySent {
+			t.Fatalf("suppressed entry audit event = %s/%s, want %s/%s",
+				event.Outcome, event.Reason,
+				status.DeliveryAuditOutcomeDeduplicated, status.DeliveryAuditReasonAlreadySent)
+		}
+		if !reflect.DeepEqual(event.Details, wantDetails) {
+			t.Fatalf("audit details = %#v, want exactly %#v", event.Details, wantDetails)
+		}
+		matched++
+	}
+	if matched != 1 {
+		t.Fatalf("deduplicated audit events for the suppressed entry = %d, want 1", matched)
 	}
 }
 
