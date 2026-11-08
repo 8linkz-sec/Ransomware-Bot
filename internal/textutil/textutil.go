@@ -794,24 +794,11 @@ func closingQuotedStringIndex(text string, start int) int {
 //     text. There is no anchor/text pair here that a %q mismatch (or any
 //     other re-encoding) could desync.
 //
-// KNOWN RESIDUAL, and the condition that would make it matter. This function
-// substitutes its marker into text with ReplaceAll. The generic URL regex that
-// runs afterwards matches the marker PLUS any URL bytes that happen to follow
-// it in text, and once that combined span parses, the unparsable-match collapse
-// does not fire -- so those trailing bytes survive verbatim. That is true on
-// both the success and the failure branch and for every host, not only the
-// hardcoded ones, so it is a property of the substitution rather than of any
-// one branch; fixing a single branch would reduce exposure by nothing while
-// looking like a fix.
-//
-// It is currently unreachable from every caller for one specific reason: each
-// one passes a (*url.Error).Error(), whose URL is %q-quoted, so the regex match
-// stops at the closing quote before it can reach anything else.
-//
-// If you add a caller whose text is NOT quoted that way -- a raw response body,
-// a hand-built message, a wrapped error that drops the quoting -- that reason
-// disappears and a secret following the marker will be logged verbatim. Check
-// that before adding one.
+// A caller can pass unquoted text, including a webhook response body. A URL in
+// that text may extend beyond webhookURL with additional secret path or query
+// bytes. Each anchored replacement below consumes that contiguous URL tail
+// before inserting a marker; otherwise RedactWebhookSecrets can parse the
+// marker plus tail as a harmless URL and leave the tail visible.
 func RedactWebhookSecretsForURL(text, webhookURL string) string {
 	normalized := strings.TrimSpace(webhookURL)
 	if text == "" || normalized == "" {
@@ -851,7 +838,7 @@ func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string 
 			marker = rawScheme + "://" + rawHost + redactedPathMarker
 		}
 	}
-	redacted := strings.ReplaceAll(text, normalized, marker)
+	redacted := replaceAnchoredURLAndTail(text, normalized, marker)
 	// Same %q-escaped-form pass the fallback's tier two runs below, and
 	// for the identical reason: text is normally (*url.Error).Error(),
 	// which renders with %q, so a normalized containing a backslash or
@@ -865,18 +852,16 @@ func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string 
 		rawURL.RawQuery = ""
 		rawURL.Fragment = ""
 		rawURLString := rawURL.String()
-		redacted = strings.ReplaceAll(redacted, rawURLString, marker)
+		redacted = replaceAnchoredURLAndTail(redacted, rawURLString, marker)
 		redacted = replaceQuotedForm(redacted, rawURLString, marker)
 	}
 	return RedactWebhookSecrets(redacted)
 }
 
 func redactUnparseableWebhookURL(text, normalized string, err error) string {
-	// url.Parse could not make sense of this exact string -- callers only
-	// reach this branch redacting the *url.Error text produced when
-	// url.Parse(webhookURL) itself failed, so a second url.Parse call on the
-	// same input can never succeed either, and a byte-for-byte search for
-	// normalized inside text would usually miss: (*url.Error).Error() renders
+	// url.Parse could not make sense of this exact string. When text is a
+	// *url.Error, a byte-for-byte search for normalized usually misses:
+	// (*url.Error).Error() renders
 	// its URL field with %q, which escapes exactly the control byte or
 	// backslash that made parsing fail, so the raw and %q-escaped forms of
 	// the tail differ byte-for-byte even though they print almost
@@ -914,9 +899,9 @@ func redactUnparseableWebhookURL(text, normalized string, err error) string {
 	// (a backslash or control byte inside the host), a case difference
 	// (HTTPS:// vs the regex's http(s)://), and a string with no scheme at
 	// all.
-	redacted := strings.ReplaceAll(text, normalized, marker)
+	redacted := replaceAnchoredURLAndTail(text, normalized, marker)
 	if quoted := strconv.Quote(normalized); len(quoted) >= 2 {
-		redacted = strings.ReplaceAll(redacted, quoted[1:len(quoted)-1], marker)
+		redacted = replaceAnchoredURLAndTail(redacted, quoted[1:len(quoted)-1], marker)
 	}
 	// Tier 2b, same pass, second half of the F1 fix: neither the raw nor the
 	// %q-escaped ReplaceAll above can ever reach a credential fragment that
@@ -972,9 +957,9 @@ func redactUnparseableWebhookURL(text, normalized string, err error) string {
 	// exists for) always contains "://" and is unaffected by the added
 	// check.
 	if preFragment, _, hasFragment := strings.Cut(normalized, "#"); hasFragment && strings.Contains(preFragment, "://") {
-		redacted = strings.ReplaceAll(redacted, preFragment, marker)
+		redacted = replaceAnchoredURLAndTail(redacted, preFragment, marker)
 		if quoted := strconv.Quote(preFragment); len(quoted) >= 2 {
-			redacted = strings.ReplaceAll(redacted, quoted[1:len(quoted)-1], marker)
+			redacted = replaceAnchoredURLAndTail(redacted, quoted[1:len(quoted)-1], marker)
 		}
 	}
 	// Only now does the general-purpose pass run -- late enough that it
@@ -1002,9 +987,45 @@ func redactUnparseableWebhookURL(text, normalized string, err error) string {
 	return redacted
 }
 
+// replaceAnchoredURLAndTail replaces every occurrence of anchor and the URL
+// bytes immediately following it. Whitespace is the only safe boundary for an
+// unquoted URL: punctuation such as ')' or a quote can occur inside a path.
+// This prevents a marker plus tail from being parsed as a safe URL by the
+// later generic redactor. For a quoted exact anchor, the syntactic closing
+// quote (and optional colon) is retained only if it is the entire consumed
+// tail. A longer tail is discarded, including any punctuation within it.
+func replaceAnchoredURLAndTail(text, anchor, marker string) string {
+	if anchor == "" || !strings.Contains(text, anchor) {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text))
+	for len(text) > 0 {
+		start := strings.Index(text, anchor)
+		if start < 0 {
+			out.WriteString(text)
+			break
+		}
+		out.WriteString(text[:start])
+		end := start + len(anchor)
+		for end < len(text) && !isASCIISpaceByte(text[end]) {
+			end++
+		}
+		out.WriteString(marker)
+		if start > 0 && text[start-1] == '"' {
+			tail := text[start+len(anchor) : end]
+			if tail == `"` || tail == `":` {
+				out.WriteString(tail)
+			}
+		}
+		text = text[end:]
+	}
+	return out.String()
+}
+
 // replaceQuotedForm additionally replaces anchor's strconv.Quote-escaped form
 // (outer quotes stripped) with marker inside text, on top of whatever a
-// plain byte-exact ReplaceAll(text, anchor, marker) already caught. fmt's %q
+// plain byte-exact anchor replacement already caught. fmt's %q
 // verb IS strconv.Quote, so this reproduces byte-for-byte whatever
 // (*url.Error).Error() -- or any other %q-formatted text -- wrote for
 // anchor, catching an occurrence %q rendered as two printable characters
@@ -1019,7 +1040,7 @@ func redactUnparseableWebhookURL(text, normalized string, err error) string {
 // already-tested code for an unrelated refactor.
 func replaceQuotedForm(text, anchor, marker string) string {
 	quoted := strconv.Quote(anchor)
-	return strings.ReplaceAll(text, quoted[1:len(quoted)-1], marker)
+	return replaceAnchoredURLAndTail(text, quoted[1:len(quoted)-1], marker)
 }
 
 // redactURLErrorSubstringFragments redacts any %q-quoted fragment inside
