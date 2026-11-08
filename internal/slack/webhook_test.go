@@ -422,15 +422,17 @@ func disableSlackRetrySleep(t *testing.T) {
 	t.Cleanup(func() { slackRetrySleep = previous })
 }
 
+type slackTransportCauseCase struct {
+	name          string
+	cause         error
+	wantRetryable bool
+	wantCanceled  bool
+	wantDeadline  bool
+	wantOpError   bool
+}
+
 func TestExecuteWebhookTransportErrorPreservesCause(t *testing.T) {
-	tests := []struct {
-		name          string
-		cause         error
-		wantRetryable bool
-		wantCanceled  bool
-		wantDeadline  bool
-		wantOpError   bool
-	}{
+	tests := []slackTransportCauseCase{
 		{name: "context canceled", cause: context.Canceled, wantRetryable: false, wantCanceled: true},
 		{name: "context deadline exceeded", cause: context.DeadlineExceeded, wantRetryable: true, wantDeadline: true},
 		{
@@ -464,31 +466,36 @@ func TestExecuteWebhookTransportErrorPreservesCause(t *testing.T) {
 			}))
 
 			err := sendTestSlackRansomware(context.Background(), sender, testSlackWebhookURL)
-			if err == nil {
-				t.Fatal("expected transport error")
-			}
-
-			var transportErr *webhookhttp.TransportError
-			if !errors.As(err, &transportErr) {
-				t.Fatalf("errors.As(*webhookhttp.TransportError) = false for %v", err)
-			}
-			if transportErr.Provider != "slack" {
-				t.Fatalf("TransportError.Provider = %q, want %q", transportErr.Provider, "slack")
-			}
-			if got := transportErr.Retryable(); got != tc.wantRetryable {
-				t.Fatalf("TransportError.Retryable() = %t, want %t", got, tc.wantRetryable)
-			}
-			if got := errors.Is(err, context.Canceled); got != tc.wantCanceled {
-				t.Fatalf("errors.Is(err, context.Canceled) = %t, want %t", got, tc.wantCanceled)
-			}
-			if got := errors.Is(err, context.DeadlineExceeded); got != tc.wantDeadline {
-				t.Fatalf("errors.Is(err, context.DeadlineExceeded) = %t, want %t", got, tc.wantDeadline)
-			}
-			var opErr *net.OpError
-			if got := errors.As(err, &opErr); got != tc.wantOpError {
-				t.Fatalf("errors.As(err, *net.OpError) = %t, want %t", got, tc.wantOpError)
-			}
+			assertSlackTransportErrorCause(t, err, tc)
 		})
+	}
+}
+
+func assertSlackTransportErrorCause(t *testing.T, err error, tc slackTransportCauseCase) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected transport error")
+	}
+
+	var transportErr *webhookhttp.TransportError
+	if !errors.As(err, &transportErr) {
+		t.Fatalf("errors.As(*webhookhttp.TransportError) = false for %v", err)
+	}
+	if transportErr.Provider != "slack" {
+		t.Fatalf("TransportError.Provider = %q, want %q", transportErr.Provider, "slack")
+	}
+	if got := transportErr.Retryable(); got != tc.wantRetryable {
+		t.Fatalf("TransportError.Retryable() = %t, want %t", got, tc.wantRetryable)
+	}
+	if got := errors.Is(err, context.Canceled); got != tc.wantCanceled {
+		t.Fatalf("errors.Is(err, context.Canceled) = %t, want %t", got, tc.wantCanceled)
+	}
+	if got := errors.Is(err, context.DeadlineExceeded); got != tc.wantDeadline {
+		t.Fatalf("errors.Is(err, context.DeadlineExceeded) = %t, want %t", got, tc.wantDeadline)
+	}
+	var opErr *net.OpError
+	if got := errors.As(err, &opErr); got != tc.wantOpError {
+		t.Fatalf("errors.As(err, *net.OpError) = %t, want %t", got, tc.wantOpError)
 	}
 }
 

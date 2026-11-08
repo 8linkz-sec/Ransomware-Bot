@@ -220,7 +220,11 @@ func TestPreviewRansomwareEntryExposesBlocks(t *testing.T) {
 	if !ok || len(blocks) == 0 {
 		t.Fatalf("preview blocks = %#v, want non-empty block list", preview["blocks"])
 	}
+	assertPreviewRansomwareBlocks(t, blocks)
+}
 
+func assertPreviewRansomwareBlocks(t *testing.T, blocks []map[string]any) {
+	t.Helper()
 	var sawText, sawFields, sawElements, sawButton bool
 	for _, block := range blocks {
 		if _, ok := block["text"]; ok {
@@ -234,17 +238,22 @@ func TestPreviewRansomwareEntryExposesBlocks(t *testing.T) {
 		}
 		if accessory, ok := block["accessory"].(map[string]any); ok {
 			sawButton = true
-			if accessory["url"] != "https://victim.example.com" {
-				t.Fatalf("accessory preview url = %v, want website URL", accessory["url"])
-			}
-			if _, ok := accessory["text"].(map[string]any); !ok {
-				t.Fatalf("accessory preview text = %#v, want text object map", accessory["text"])
-			}
+			assertPreviewWebsiteAccessory(t, accessory)
 		}
 	}
 	if !sawText || !sawFields || !sawElements || !sawButton {
 		t.Fatalf("preview blocks missing sections (text=%v fields=%v elements=%v button=%v): %#v",
 			sawText, sawFields, sawElements, sawButton, blocks)
+	}
+}
+
+func assertPreviewWebsiteAccessory(t *testing.T, accessory map[string]any) {
+	t.Helper()
+	if accessory["url"] != "https://victim.example.com" {
+		t.Fatalf("accessory preview url = %v, want website URL", accessory["url"])
+	}
+	if _, ok := accessory["text"].(map[string]any); !ok {
+		t.Fatalf("accessory preview text = %#v, want text object map", accessory["text"])
 	}
 }
 
