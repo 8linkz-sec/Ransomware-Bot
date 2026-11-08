@@ -76,8 +76,8 @@ func driveGracefulShutdown(t *testing.T, testName, helperEnv string, beforeSigna
 		}
 		if time.Now().After(readyDeadline) {
 			_ = cmd.Process.Kill()
-			<-waitErr
-			t.Fatalf("bot did not write readiness marker in time; output:\n%s", output.String())
+			waitResult := <-waitErr
+			t.Fatalf("bot did not write readiness marker in time (wait error: %v); output:\n%s", waitResult, output.String())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -93,12 +93,12 @@ func driveGracefulShutdown(t *testing.T, testName, helperEnv string, beforeSigna
 	}
 	if err := sendShutdownSignal(cmd); err != nil {
 		if errors.Is(err, os.ErrProcessDone) {
-			<-waitErr
-			t.Fatalf("bot process was already gone when the shutdown signal was sent: %v; output:\n%s", err, output.String())
+			waitResult := <-waitErr
+			t.Fatalf("bot process was already gone when the shutdown signal was sent: %v (wait error: %v); output:\n%s", err, waitResult, output.String())
 		}
 		_ = cmd.Process.Kill()
-		<-waitErr
-		t.Skipf("cannot deliver shutdown signal in this environment: %v", err)
+		waitResult := <-waitErr
+		t.Skipf("cannot deliver shutdown signal in this environment: %v (wait error: %v)", err, waitResult)
 	}
 
 	select {
@@ -108,8 +108,8 @@ func driveGracefulShutdown(t *testing.T, testName, helperEnv string, beforeSigna
 		}
 	case <-time.After(30 * time.Second):
 		_ = cmd.Process.Kill()
-		<-waitErr
-		t.Fatalf("bot did not exit after shutdown signal; output:\n%s", output.String())
+		waitResult := <-waitErr
+		t.Fatalf("bot did not exit after shutdown signal (wait error: %v); output:\n%s", waitResult, output.String())
 	}
 
 	for _, want := range []string{"Bot started successfully", "Bot stopped successfully"} {
