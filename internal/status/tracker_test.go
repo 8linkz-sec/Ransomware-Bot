@@ -250,7 +250,16 @@ func TestEnqueueRetryRedactsWebhookSecretsFromPersistedErrors(t *testing.T) {
 	discordURL := "https://discord.com/api/v9/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
 	lastError := "slack failed: " + slackURL + " discord failed: " + discordURL
 
-	if !tracker.enqueueRetryForTest("item-1", discordURL, "discord", "api", "Example", lastError, 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: discordURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     lastError,
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved item to dead letter")
 	}
 	if err := tracker.SavePendingChanges(); err != nil {
@@ -287,7 +296,16 @@ func TestSavePendingChangesWritesStatusJSONWithFinalNewline(t *testing.T) {
 		FeedTitle: "Feed",
 		Published: time.Now().UTC().Format(time.RFC3339),
 	})
-	if !tracker.enqueueRetryForTest("api-item", "discord.ransomware", "discord", "api", "Example", "temporary failure", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "api-item",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -380,7 +398,17 @@ func TestEnqueueAPIRetryPersistsPayloadVersion(t *testing.T) {
 
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
 	payload := []byte(`{"id":"victim-1","group":"lockbit","victim":"Example Corp"}`)
-	if !tracker.enqueueRetryForTest("item-1", webhookURL, "discord", "api", "Example Corp", "temporary failure", 3, time.Hour, payload) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -407,10 +435,28 @@ func TestEnqueueAPIRetryPersistsPayloadVersion(t *testing.T) {
 func TestRetryItemsByTypeUsesMaintainedTypeIndex(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest("api-item", "discord.ransomware", "discord", "api", "API Item", "temporary failure", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "api-item",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "API Item",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry(api) unexpectedly failed")
 	}
-	if !tracker.enqueueRetryForTest("rss-item", "discord.rss.general", "discord", "rss", "RSS Item", "temporary failure", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "rss-item",
+		DestinationID: "discord.rss.general",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("rss"),
+		Title:         "RSS Item",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry(rss) unexpectedly failed")
 	}
 
@@ -491,7 +537,17 @@ func TestEnqueueRetryClonesPayloadInput(t *testing.T) {
 
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
 	payload := []byte(`{"id":"victim-1","group":"lockbit"}`)
-	if !tracker.enqueueRetryForTest("item-1", webhookURL, "discord", "api", "Example Corp", "temporary failure", 3, time.Hour, payload) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -513,10 +569,30 @@ func TestDeadLetterTransitionPreservesReplayPayload(t *testing.T) {
 	itemKey := "api-item-with-payload"
 	destinationID := "slack.ransomware"
 	payload := []byte(`{"id":"victim-1","victim":"Example Corp"}`)
-	if !tracker.enqueueRetryForTest(itemKey, destinationID, "slack", "api", "Example Corp", "first failure", 1, time.Hour, payload) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: destinationID,
+		Messenger:     Messenger("slack"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "first failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("initial EnqueueRetryForDestination() unexpectedly failed")
 	}
-	if tracker.enqueueRetryForTest(itemKey, destinationID, "slack", "api", "Example Corp", "second failure", 1, time.Hour, payload) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: destinationID,
+		Messenger:     Messenger("slack"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "second failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("second EnqueueRetryForDestination() accepted item past max attempts")
 	}
 
@@ -586,7 +662,17 @@ func TestGetRetryItemsByTypeClonesPayloadOutput(t *testing.T) {
 	tracker := NewMemoryTracker()
 
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest("item-1", webhookURL, "discord", "api", "Example Corp", "temporary failure", 3, time.Hour, []byte(`{"id":"victim-1"}`)) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+		Payload:       []byte(`{"id":"victim-1"}`),
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -604,7 +690,16 @@ func TestGetRetryItemsByTypeClonesPayloadOutput(t *testing.T) {
 
 func TestRemoveFromRetryQueueMissingLeavesRetryStateUnchanged(t *testing.T) {
 	tracker := NewMemoryTracker()
-	if !tracker.enqueueRetryForTest("kept-item", "discord.ransomware", "discord", "api", "Kept Item", "temporary failure", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "kept-item",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Kept Item",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	tracker.clearDirtyState()
@@ -629,10 +724,30 @@ func TestGetDeadLetterItemsClonesPayloadOutput(t *testing.T) {
 	itemKey := "item-1"
 	destinationID := "discord.ransomware"
 	payload := []byte(`{"id":"victim-1"}`)
-	if !tracker.enqueueRetryForTest(itemKey, destinationID, "discord", "api", "Example Corp", "first failure", 1, time.Hour, payload) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: destinationID,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "first failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("initial EnqueueRetryForDestination() unexpectedly failed")
 	}
-	if tracker.enqueueRetryForTest(itemKey, destinationID, "discord", "api", "Example Corp", "second failure", 1, time.Hour, payload) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: destinationID,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "second failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("second EnqueueRetryForDestination() accepted item past max attempts")
 	}
 
@@ -802,7 +917,16 @@ func TestEnqueueRetryForDestinationPersistsDestinationID(t *testing.T) {
 
 	destinationID := "discord.ransomware"
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/secret-token"
-	if !tracker.enqueueRetryForTest("api-item-1", destinationID, "discord", "api", "Example", "temporary failure", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "api-item-1",
+		DestinationID: destinationID,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetryForDestination() unexpectedly failed")
 	}
 
@@ -844,10 +968,28 @@ func TestDeadLetterStateIsScopedToDestination(t *testing.T) {
 	if tracker.IsRetryDeadLetteredForDestination(itemKey, healthyDestination, "discord", "api") {
 		t.Fatal("different destination should not be blocked by destination-scoped dead letter")
 	}
-	if tracker.enqueueRetryForTest(itemKey, deadDestination, "discord", "api", "Example", "temporary failure", 3, time.Hour) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: deadDestination,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("dead-lettered destination accepted a retry")
 	}
-	if !tracker.enqueueRetryForTest(itemKey, healthyDestination, "discord", "api", "Example", "temporary failure", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: healthyDestination,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("different destination should remain retryable")
 	}
 
@@ -865,7 +1007,16 @@ func TestMarkRetryDeadLetterForDestinationRemovesExistingQueuedRetry(t *testing.
 
 	itemKey := "api-item-queued-then-dead"
 	destinationID := "slack.ransomware"
-	if !tracker.enqueueRetryForTest(itemKey, destinationID, "slack", "api", "Example", "temporary failure", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: destinationID,
+		Messenger:     Messenger("slack"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("initial retry enqueue unexpectedly failed")
 	}
 
@@ -887,7 +1038,16 @@ func TestLegacyDeadLetterBlocksAllDestinations(t *testing.T) {
 	if !tracker.IsRetryDeadLetteredForDestination("api-item-1", "discord.ransomware", "discord", "api") {
 		t.Fatal("legacy dead-letter entry should block destination-specific lookups")
 	}
-	if tracker.enqueueRetryForTest("api-item-1", "discord.ransomware", "discord", "api", "Example", "temporary failure", 3, time.Hour) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "api-item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("legacy dead-letter entry accepted a destination-specific retry")
 	}
 }
@@ -896,7 +1056,16 @@ func TestRetryLifecycleTimestampsAreOffsetAware(t *testing.T) {
 	tracker := newTestTracker(t)
 
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest("retry-item", webhookURL, "discord", "api", "Retry Item", "temporary failure", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "retry-item",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Retry Item",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved item to dead letter")
 	}
 	items := tracker.GetRetryItemsByType("api")
@@ -997,7 +1166,16 @@ func TestSavePendingChangesKeepsDirtyStateAfterSaveFailures(t *testing.T) {
 		Link:      "https://example.test/rss-item",
 		Published: "2026-01-01 00:00:00",
 	})
-	if !tracker.enqueueRetryForTest("retry-item", webhookURL, "discord", "api", "Retry Item", "temporary failure", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "retry-item",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Retry Item",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved item to dead letter")
 	}
 
@@ -1088,7 +1266,16 @@ func TestStatusSaveErrorsIncludeTemporaryFilePath(t *testing.T) {
 			name: "retry",
 			file: "retry_status.json",
 			mark: func(tracker *Tracker) {
-				tracker.enqueueRetryForTest("retry-item", webhookURL, "discord", "api", "Retry Item", "temporary failure", 3, time.Hour)
+				tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "retry-item",
+					DestinationID: webhookURL,
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("api"),
+					Title:         "Retry Item",
+					LastError:     "temporary failure",
+					MaxAttempts:   3,
+					RetryWindow:   time.Hour,
+				})
 			},
 			save: func(tracker *Tracker) error {
 				return tracker.saveRetryStatus()
@@ -1132,16 +1319,16 @@ func TestSaveRetryStatusLogsQueueAndDeadLetterCounts(t *testing.T) {
 	defer log.SetLevel(previousLevel)
 
 	tracker := newTestTracker(t)
-	tracker.enqueueRetryForTest(
-		"retry-item",
-		"https://discord.com/api/webhooks/123456789012345678/test-token",
-		"discord",
-		"api",
-		"Retry Item",
-		"temporary failure",
-		3,
-		time.Hour,
-	)
+	tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "retry-item",
+		DestinationID: "https://discord.com/api/webhooks/123456789012345678/test-token",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Retry Item",
+		LastError:     "temporary failure",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	})
 	tracker.MarkRetryDeadLetter("dead-item", "discord", "api", "Dead Item", "terminal failure")
 
 	if err := tracker.saveRetryStatus(); err != nil {
@@ -1895,7 +2082,16 @@ func TestStatusWritesUseUTCOffsetAwareTimestamps(t *testing.T) {
 	tracker.UpdateAPIStatus(true, 1, "")
 	tracker.MarkAPIItemSentToDestination("api-item", "API Item", "discord.ransomware")
 	tracker.MarkRSSItemSentToDestination("rss-item", "RSS Item", "Feed", "discord.rss")
-	if !tracker.enqueueRetryForTest("retry-item", "discord.ransomware", "discord", "api", "Retry Item", "failed", 3, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "retry-item",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Retry Item",
+		LastError:     "failed",
+		MaxAttempts:   3,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetryForDestination() returned false")
 	}
 	tracker.MarkRetryDeadLetter("dead-item", "discord", "api", "Dead Item", "terminal")
@@ -2342,7 +2538,16 @@ func TestStatusSummaryReportsOperationalCounts(t *testing.T) {
 		Published: "2026-01-01 00:00:00.000000",
 	})
 	tracker.MarkRSSItemSentToWebhook("rss-item", "RSS Item", "Example Feed", rssWebhookURL)
-	if !tracker.enqueueRetryForTest("retry-item", apiWebhookURL, "slack", "api", "Retry Item", "retry pending", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "retry-item",
+		DestinationID: apiWebhookURL,
+		Messenger:     Messenger("slack"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Retry Item",
+		LastError:     "retry pending",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved retry item to dead letter")
 	}
 	tracker.MarkRetryDeadLetter("dead-item", "discord", "rss", "Dead Item", "terminal failure")
@@ -2692,10 +2897,28 @@ func TestCleanupOldEntriesPrunesDeliveredRSSItemsByAge(t *testing.T) {
 	})
 	tracker.MarkRSSItemSentToWebhook("old-delivered", "Old Delivered", "Example Feed", webhookURL)
 	tracker.MarkRSSItemSentToWebhook("recent-delivered", "Recent Delivered", "Example Feed", webhookURL)
-	if !tracker.enqueueRetryForTest("old-delivered", webhookURL, "discord", "rss", "Old Delivered", "temporary failure", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "old-delivered",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("rss"),
+		Title:         "Old Delivered",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry(old-delivered) unexpectedly moved item to dead letter")
 	}
-	if !tracker.enqueueRetryForTest("old-unsent", webhookURL, "discord", "rss", "Old Unsent", "temporary failure", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "old-unsent",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("rss"),
+		Title:         "Old Unsent",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry(old-unsent) unexpectedly moved item to dead letter")
 	}
 
@@ -2816,7 +3039,16 @@ func TestCleanupOldEntriesMovesAgedRetryQueueItemsToDeadLetter(t *testing.T) {
 
 	itemKey := "retry-item"
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest(itemKey, webhookURL, "discord", "api", "Retry Item", "temporary failure", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Retry Item",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved item to dead letter")
 	}
 
@@ -2849,7 +3081,16 @@ func TestCleanupOldEntriesUsesConfiguredRetryQueueMaxAge(t *testing.T) {
 
 	itemKey := "retry-item"
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest(itemKey, webhookURL, "discord", "api", "Retry Item", "temporary failure", 5, 24*time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Retry Item",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   24 * time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved item to dead letter")
 	}
 
@@ -2901,13 +3142,40 @@ func TestEnqueueRetryDoesNotRequeueDeadLetteredItem(t *testing.T) {
 	tracker := newTestTracker(t)
 
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest("item-1", webhookURL, "discord", "api", "Example", "first failure", 1, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("first EnqueueRetry() unexpectedly failed")
 	}
-	if tracker.enqueueRetryForTest("item-1", webhookURL, "discord", "api", "Example", "second failure", 1, time.Hour) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "second failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("second EnqueueRetry() should move item to dead letter")
 	}
-	if tracker.enqueueRetryForTest("item-1", webhookURL, "discord", "api", "Example", "third failure", 1, time.Hour) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "third failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("dead-lettered item was requeued")
 	}
 
@@ -2931,7 +3199,16 @@ func TestEnqueueRetryDeadLettersMalformedFirstFailedTimestamp(t *testing.T) {
 
 	itemKey := "item-1"
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest(itemKey, webhookURL, "discord", "api", "Example", "first failure", 10, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   10,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("initial EnqueueRetry() unexpectedly failed")
 	}
 
@@ -2939,7 +3216,16 @@ func TestEnqueueRetryDeadLettersMalformedFirstFailedTimestamp(t *testing.T) {
 		t.Fatal("queued retry item missing")
 	}
 
-	if tracker.enqueueRetryForTest(itemKey, webhookURL, "discord", "api", "Example", "second failure", 10, time.Hour) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "second failure",
+		MaxAttempts:   10,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() accepted malformed first_failed timestamp")
 	}
 	if items := tracker.GetRetryItemsByType("api"); len(items) != 0 {
@@ -2956,7 +3242,16 @@ func TestEnqueueRetryRetryWindowMovesToDeadLetter(t *testing.T) {
 
 	itemKey := "item-1"
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest(itemKey, webhookURL, "discord", "api", "Example", "first failure", 0, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   0,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("initial EnqueueRetry() unexpectedly failed")
 	}
 
@@ -2965,7 +3260,16 @@ func TestEnqueueRetryRetryWindowMovesToDeadLetter(t *testing.T) {
 		t.Fatal("queued retry item missing")
 	}
 
-	if tracker.enqueueRetryForTest(itemKey, webhookURL, "discord", "api", "Example", "second failure", 0, time.Hour) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "second failure",
+		MaxAttempts:   0,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() accepted item outside retry window")
 	}
 	if items := tracker.GetRetryItemsByType("api"); len(items) != 0 {
@@ -2982,7 +3286,16 @@ func TestRecordRetryQueueFailureDeadLettersMalformedFirstFailedTimestamp(t *test
 
 	itemKey := "item-1"
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest(itemKey, webhookURL, "discord", "api", "Example", "first failure", 10, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   10,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("initial EnqueueRetry() unexpectedly failed")
 	}
 
@@ -3008,7 +3321,16 @@ func TestRecordRetryQueueFailureRetryWindowMovesToDeadLetter(t *testing.T) {
 
 	itemKey := "item-1"
 	webhookURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
-	if !tracker.enqueueRetryForTest(itemKey, webhookURL, "discord", "api", "Example", "first failure", 0, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: webhookURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   0,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("initial EnqueueRetry() unexpectedly failed")
 	}
 
@@ -3045,45 +3367,8 @@ func assertDeadLetterContains(t *testing.T, tracker *Tracker, wantError, wantRea
 	}
 }
 
-func (tracker *Tracker) enqueueRetryForTest(
-	itemKey, destinationID, messenger, itemType, title, lastError string,
-	maxAttempts int,
-	retryWindow time.Duration,
-	payload ...[]byte,
-) bool {
-	return tracker.EnqueueRetry(retryRequestForTest(
-		itemKey,
-		destinationID,
-		messenger,
-		itemType,
-		title,
-		lastError,
-		maxAttempts,
-		retryWindow,
-		payload...,
-	))
-}
-
-func retryRequestForTest(
-	itemKey, destinationID, messenger, itemType, title, lastError string,
-	maxAttempts int,
-	retryWindow time.Duration,
-	payload ...[]byte,
-) RetryRequest {
-	req := RetryRequest{
-		ItemKey:       itemKey,
-		DestinationID: destinationID,
-		Messenger:     Messenger(messenger),
-		ItemType:      RetryItemType(itemType),
-		Title:         title,
-		LastError:     lastError,
-		MaxAttempts:   maxAttempts,
-		RetryWindow:   retryWindow,
-	}
-	if len(payload) > 0 {
-		req.Payload = payload[0]
-	}
-	return req
+func (tracker *Tracker) enqueueRetryForTest(req RetryRequest) bool {
+	return tracker.EnqueueRetry(req)
 }
 
 func queuedRetryKeyForTest(t *testing.T, tracker *Tracker, itemKey, itemType string) string {

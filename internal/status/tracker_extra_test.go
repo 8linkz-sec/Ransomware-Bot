@@ -1102,7 +1102,16 @@ func TestCleanupParsedPruneSkipsNonRSSRetryRows(t *testing.T) {
 	tracker.MarkRSSItemParsed("https://f.test/feed.xml", "new", StoredRSSEntry{Published: statusNow().Format(time.RFC3339Nano)})
 	tracker.MarkRSSItemSentToDestination("old", "Old", "Feed", "discord.rss")
 	tracker.MarkRSSItemSentToDestination("new", "New", "Feed", "discord.rss")
-	if !tracker.enqueueRetryForTest("old", "discord.ransomware", "discord", "api", "Old", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "old",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Old",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 

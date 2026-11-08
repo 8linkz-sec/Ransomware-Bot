@@ -73,7 +73,16 @@ func TestEnqueueDeferredRetrySkipsDeadLetteredItem(t *testing.T) {
 func TestRemoveFromRetryQueueRemovesQueuedItem(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -88,7 +97,16 @@ func TestRemoveFromRetryQueueByDestinationHandlesLegacyDestinations(t *testing.T
 	tracker := NewMemoryTracker()
 	legacyURL := "https://discord.com/api/webhooks/123456789012345678/test-token"
 
-	if !tracker.enqueueRetryForTest("item-1", legacyURL, "discord", "api", "Example", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: legacyURL,
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -102,7 +120,16 @@ func TestRemoveFromRetryQueueByDestinationHandlesLegacyDestinations(t *testing.T
 func TestRemoveRetryQueueEntryRemovesByOpaqueKey(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	queueKey := queuedRetryKeyForTest(t, tracker, "item-1", "api")
@@ -117,7 +144,16 @@ func TestRemoveRetryQueueEntryRemovesByOpaqueKey(t *testing.T) {
 func TestRecordRetryQueueFailureKeepsRetryableItemQueued(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "first failure", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	queueKey := queuedRetryKeyForTest(t, tracker, "item-1", "api")
@@ -158,9 +194,16 @@ func TestRecordRetryQueueFailureKeepsRetryableItemQueued(t *testing.T) {
 func TestRecordRetryQueueFailureRetryBudgetBoundary(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest(
-		"item-1", "discord.ransomware", "discord", "api", "Example", "first failure", 2, time.Hour,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   2,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	queueKey := queuedRetryKeyForTest(t, tracker, "item-1", "api")
@@ -223,7 +266,17 @@ func TestRecordRetryQueueFailureBackfillsLegacyAPIPayloadVersion(t *testing.T) {
 	tracker := NewMemoryTracker()
 	payload := []byte(`{"post_title":"legacy"}`)
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "first failure", 5, time.Hour, payload) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	// Simulate a legacy persisted queue item that predates payload versioning.
@@ -244,13 +297,32 @@ func TestEnqueueRetryUpdateBackfillsLegacyAPIPayloadVersion(t *testing.T) {
 	tracker := NewMemoryTracker()
 	payload := []byte(`{"post_title":"legacy"}`)
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "first failure", 5, time.Hour, payload) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("initial EnqueueRetry() unexpectedly failed")
 	}
 	// Simulate a legacy persisted queue item that predates payload versioning.
 	clearQueuedRetryPayloadVersionsForTest(t, tracker)
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "second failure", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "second failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("update EnqueueRetry() dead-lettered a retryable item")
 	}
 
@@ -295,14 +367,30 @@ func TestMarkRetryDeadLetterSkipsDuplicateTerminalRecords(t *testing.T) {
 func TestMarkRetryDeadLetterForDestinationKeepsOtherDestinationQueued(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest(
-		"item-1", "discord.a", "discord", "api", "Example", "boom", 5, time.Hour, []byte(`{"id":"row-a"}`),
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.a",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       []byte(`{"id":"row-a"}`),
+	}) {
 		t.Fatal("EnqueueRetry() for discord.a unexpectedly failed")
 	}
-	if !tracker.enqueueRetryForTest(
-		"item-1", "discord.b", "discord", "api", "Example", "boom", 5, time.Hour, []byte(`{"id":"row-b"}`),
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.b",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       []byte(`{"id":"row-b"}`),
+	}) {
 		t.Fatal("EnqueueRetry() for discord.b unexpectedly failed")
 	}
 	queueKeyB := queuedRetryKeyForDestinationForTest(t, tracker, "item-1", "api", "discord.b")
@@ -341,7 +429,16 @@ func TestMarkRetryDeadLetterForDestinationKeepsOtherDestinationQueued(t *testing
 func TestSetQueuedRetryTimesRequiresMatchingItem(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -388,7 +485,16 @@ func TestIsRetryDeadLetteredForDestinationMatchesLegacyDestination(t *testing.T)
 func TestGetRetryItemsByTypeRebuildsStaleIndex(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -432,10 +538,28 @@ func TestCleanupOldEntriesPrunesRetryQueueByCount(t *testing.T) {
 	policy.MaxRetryQueueItems = 1
 	tracker := NewMemoryTrackerWithRetention(policy)
 
-	if !tracker.enqueueRetryForTest("item-old", "discord.ransomware", "discord", "api", "Old", "boom", 5, 24*time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-old",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Old",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   24 * time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() for item-old unexpectedly failed")
 	}
-	if !tracker.enqueueRetryForTest("item-new", "discord.ransomware", "discord", "api", "New", "boom", 5, 24*time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-new",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "New",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   24 * time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() for item-new unexpectedly failed")
 	}
 	oldTime := formatStatusTimestamp(statusNow().Add(-time.Hour))
@@ -487,9 +611,17 @@ func TestMarkRetryDeadLetterForDestinationKeepsQueuedHistory(t *testing.T) {
 	tracker := newTestTracker(t)
 	payload := []byte(`{"id":"abc-1234"}`)
 
-	if !tracker.enqueueRetryForTest(
-		"api-item-queued", "slack.ransomware", "slack", "api", "Example", "boom", 10, time.Hour, payload,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "api-item-queued",
+		DestinationID: "slack.ransomware",
+		Messenger:     Messenger("slack"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   10,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	queueKey := queuedRetryKeyForDestinationForTest(t, tracker, "api-item-queued", "api", "slack.ransomware")
@@ -586,7 +718,16 @@ func TestMarkRetryDeadLetterWithoutQueuedItemKeepsFreshRecord(t *testing.T) {
 func TestMarkRetryDeadLetterLegacyKeepsQueuedHistoryWithoutDestination(t *testing.T) {
 	tracker := newTestTracker(t)
 
-	if !tracker.enqueueRetryForTest("legacy-item", "discord.a", "discord", "api", "Example", "boom", 10, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "legacy-item",
+		DestinationID: "discord.a",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   10,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	queueKey := queuedRetryKeyForDestinationForTest(t, tracker, "legacy-item", "api", "discord.a")
@@ -614,9 +755,16 @@ func TestMarkRetryDeadLetterLegacyKeepsQueuedHistoryWithoutDestination(t *testin
 func TestMarkRetryDeadLetterForDestinationKeepsRSSRecoveryHistory(t *testing.T) {
 	tracker := newTestTracker(t)
 
-	if !tracker.enqueueRetryForTest(
-		"rss-item", "discord.rss.general", "discord", "rss", "Feed Post", "boom", 10, time.Hour,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "rss-item",
+		DestinationID: "discord.rss.general",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("rss"),
+		Title:         "Feed Post",
+		LastError:     "boom",
+		MaxAttempts:   10,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	queueKey := queuedRetryKeyForDestinationForTest(t, tracker, "rss-item", "rss", "discord.rss.general")
@@ -672,14 +820,30 @@ func TestMarkRetryDeadLetterLegacyPicksQueuedRowDeterministically(t *testing.T) 
 	for i := 0; i < 20; i++ {
 		tracker := newTestTracker(t)
 
-		if !tracker.enqueueRetryForTest(
-			"tie-item", "discord.a", "discord", "api", "Example", "boom", 10, time.Hour, []byte(`{"id":"row-a"}`),
-		) {
+		if !tracker.enqueueRetryForTest(RetryRequest{
+			ItemKey:       "tie-item",
+			DestinationID: "discord.a",
+			Messenger:     Messenger("discord"),
+			ItemType:      RetryItemType("api"),
+			Title:         "Example",
+			LastError:     "boom",
+			MaxAttempts:   10,
+			RetryWindow:   time.Hour,
+			Payload:       []byte(`{"id":"row-a"}`),
+		}) {
 			t.Fatalf("iteration %d: EnqueueRetry(discord.a) unexpectedly failed", i)
 		}
-		if !tracker.enqueueRetryForTest(
-			"tie-item", "discord.b", "discord", "api", "Example", "boom", 10, time.Hour, []byte(`{"id":"row-b"}`),
-		) {
+		if !tracker.enqueueRetryForTest(RetryRequest{
+			ItemKey:       "tie-item",
+			DestinationID: "discord.b",
+			Messenger:     Messenger("discord"),
+			ItemType:      RetryItemType("api"),
+			Title:         "Example",
+			LastError:     "boom",
+			MaxAttempts:   10,
+			RetryWindow:   time.Hour,
+			Payload:       []byte(`{"id":"row-b"}`),
+		}) {
 			t.Fatalf("iteration %d: EnqueueRetry(discord.b) unexpectedly failed", i)
 		}
 		queueKeyB := queuedRetryKeyForDestinationForTest(t, tracker, "tie-item", "api", "discord.b")
@@ -793,10 +957,16 @@ func TestEnqueueRetryAttemptBudgetAcrossMaxAttempts(t *testing.T) {
 			tracker := NewMemoryTracker()
 
 			for i, step := range tc.steps {
-				enqueued := tracker.enqueueRetryForTest(
-					"item-1", "discord.ransomware", "discord", "api", "Example", "boom",
-					tc.maxAttempts, time.Hour,
-				)
+				enqueued := tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "item-1",
+					DestinationID: "discord.ransomware",
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("api"),
+					Title:         "Example",
+					LastError:     "boom",
+					MaxAttempts:   tc.maxAttempts,
+					RetryWindow:   time.Hour,
+				})
 				if enqueued != step.wantEnqueued {
 					t.Fatalf("failure #%d: EnqueueRetry() = %v, want %v", i+1, enqueued, step.wantEnqueued)
 				}
@@ -840,14 +1010,28 @@ func TestEnqueueRetryAttemptBudgetAcrossMaxAttempts(t *testing.T) {
 func TestEnqueueRetryMaxAttemptsOneAuditsQueueThenDeadLetter(t *testing.T) {
 	tracker, dir := newTestTrackerWithDir(t)
 
-	if !tracker.enqueueRetryForTest(
-		"item-1", "discord.ransomware", "discord", "api", "Example", "boom", 1, time.Hour,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() did not queue the first failure, want one retry after the first send")
 	}
-	if tracker.enqueueRetryForTest(
-		"item-1", "discord.ransomware", "discord", "api", "Example", "boom", 1, time.Hour,
-	) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() queued the second failure, want it dead-lettered with retry_max_attempts=1")
 	}
 
@@ -945,9 +1129,16 @@ func TestMarkRetryDeadLetterForDestinationAuditsRetryCountForInheritedQueuedRow(
 
 	// A first failure that is retried (large max attempts so it queues
 	// instead of dead-lettering) leaves a queued row with RetryCount 1.
-	if !tracker.enqueueRetryForTest(
-		"item-2", "discord.ransomware", "discord", "api", "Example2", "boom", 5, time.Hour,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-2",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example2",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() did not queue the first failure, want it queued with retry_max_attempts=5")
 	}
 
@@ -1178,9 +1369,16 @@ func TestEnqueueRetryMaxAttemptsOneDeadLetterKeepsPayloadAndFirstFailed(t *testi
 func TestEnqueueRetryMaxAttemptsOneRSSSecondFailureDeadLetters(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest(
-		"rss-item-1", "discord.rss.general", "discord", "rss", "Example", "boom", 1, time.Hour,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "rss-item-1",
+		DestinationID: "discord.rss.general",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("rss"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() did not queue the first RSS failure, want one retry after the first send")
 	}
 	queued := tracker.GetRetryItemsByType("rss")
@@ -1194,9 +1392,16 @@ func TestEnqueueRetryMaxAttemptsOneRSSSecondFailureDeadLetters(t *testing.T) {
 		t.Fatalf("dead letter count after the first failure = %d, want 0", len(items))
 	}
 
-	if tracker.enqueueRetryForTest(
-		"rss-item-1", "discord.rss.general", "discord", "rss", "Example", "boom", 1, time.Hour,
-	) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "rss-item-1",
+		DestinationID: "discord.rss.general",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("rss"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() queued the second RSS failure, want it dead-lettered with retry_max_attempts=1")
 	}
 	if items := tracker.GetRetryItemsByType("rss"); len(items) != 0 {
@@ -1214,9 +1419,16 @@ func TestEnqueueRetryMaxAttemptsOneRSSSecondFailureDeadLetters(t *testing.T) {
 	}
 
 	// RSS recovery re-attempts the item until it is pruned; every re-attempt is a no-op.
-	if tracker.enqueueRetryForTest(
-		"rss-item-1", "discord.rss.general", "discord", "rss", "Example", "boom", 1, time.Hour,
-	) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "rss-item-1",
+		DestinationID: "discord.rss.general",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("rss"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() re-queued an already dead-lettered RSS item")
 	}
 	if items := tracker.GetRetryItemsByType("rss"); len(items) != 0 {
@@ -1234,9 +1446,16 @@ func TestEnqueueRetryMaxAttemptsOneRSSSecondFailureDeadLetters(t *testing.T) {
 func TestEnqueueRetryFirstFailureNeverExhaustsRetryWindow(t *testing.T) {
 	tracker := NewMemoryTracker()
 
-	if !tracker.enqueueRetryForTest(
-		"item-1", "discord.ransomware", "discord", "api", "Example", "boom", 0, time.Nanosecond,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   0,
+		RetryWindow:   time.Nanosecond,
+	}) {
 		t.Fatal("EnqueueRetry() did not queue the first failure, want first_failed == now to keep it inside the window")
 	}
 	queued := tracker.GetRetryItemsByType("api")
@@ -1286,9 +1505,16 @@ func TestEnqueueRetryMaxAttemptsOneAfterQuietHoursDeferral(t *testing.T) {
 
 	// A quiet-hours deferral counts no send, so the deferred row gets exactly the
 	// same budget as a fresh one: one send plus one retry at retry_max_attempts=1.
-	if !tracker.enqueueRetryForTest(
-		"item-1", "discord.ransomware", "discord", "api", "Example", "boom", 1, time.Hour,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() did not queue the first real failure of a deferred row")
 	}
 	requeued := tracker.GetRetryItemsByType("api")
@@ -1302,9 +1528,16 @@ func TestEnqueueRetryMaxAttemptsOneAfterQuietHoursDeferral(t *testing.T) {
 		t.Fatalf("dead letter count after the first real failure = %d, want 0", len(items))
 	}
 
-	if tracker.enqueueRetryForTest(
-		"item-1", "discord.ransomware", "discord", "api", "Example", "boom", 1, time.Hour,
-	) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() queued the second real failure of a deferred row, want it dead-lettered")
 	}
 	if items := tracker.GetRetryItemsByType("api"); len(items) != 0 {

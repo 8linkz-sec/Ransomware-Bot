@@ -874,11 +874,7 @@ func TestSendRSSEntryToTargetFailsWithoutMessengerDelivery(t *testing.T) {
 		s.config,
 		config.FeedTypeGeneral,
 		target,
-		freshRSSDeliveryItem(entry),
-		rssDeliveryModeFresh,
-		0,
-		1,
-		nil,
+		freshRSSDeliveryItem(entry), rssDeliveryContext{mode: rssDeliveryModeFresh, index: 0, total: 1, markAttempted: nil},
 	)
 	if outcome != rssDeliveryOutcomeFailed {
 		t.Fatalf("sendRSSEntryToTarget(unknown messenger) outcome = %v, want failed", outcome)
@@ -918,11 +914,7 @@ func TestSendRSSEntryToTargetCancelsDuringSendDelay(t *testing.T) {
 		s.config,
 		config.FeedTypeGeneral,
 		target,
-		freshRSSDeliveryItem(entry),
-		rssDeliveryModeFresh,
-		0,
-		1,
-		nil,
+		freshRSSDeliveryItem(entry), rssDeliveryContext{mode: rssDeliveryModeFresh, index: 0, total: 1, markAttempted: nil},
 	)
 	if outcome != rssDeliveryOutcomeCanceled {
 		t.Fatalf("sendRSSEntryToTarget(delay cancel) outcome = %v, want canceled", outcome)
