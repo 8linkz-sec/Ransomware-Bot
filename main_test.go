@@ -1071,27 +1071,32 @@ func TestRunHealthcheckReportsAPIAuthSuspension(t *testing.T) {
 			dataDir, lastCheck := writeAPIAuthSuspendedStatus(t, tt.statusCode, tt.errorMsg)
 
 			err := runHealthcheckWithMessages(configDir, dataDir, io.Discard, i18n.ForLocale(tt.locale))
-			if err == nil {
-				t.Fatal("runHealthcheckWithMessages() error = nil, want API failure")
-			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("runHealthcheckWithMessages() error = %v, want it to contain %q", err, tt.want)
-			}
-			if tt.statusCode == http.StatusInternalServerError {
-				if strings.Contains(err.Error(), lastCheck) {
-					t.Fatalf("runHealthcheckWithMessages() error = %v, want the generic message without the check timestamp", err)
-				}
-				return
-			}
-			if !strings.Contains(err.Error(), tt.errorMsg) {
-				t.Fatalf("runHealthcheckWithMessages() error = %v, want it to carry the operator error %q", err, tt.errorMsg)
-			}
-			// The timestamp is the operator's only way to tell a live suspension
-			// from a stale api_status.json read right after a restart.
-			if !strings.Contains(err.Error(), lastCheck) {
-				t.Fatalf("runHealthcheckWithMessages() error = %v, want it to carry the persisted last check %q", err, lastCheck)
-			}
+			assertAPIHealthcheckVerdict(t, err, tt.want, tt.statusCode, tt.errorMsg, lastCheck)
 		})
+	}
+}
+
+func assertAPIHealthcheckVerdict(t *testing.T, err error, want string, statusCode int, errorMsg, lastCheck string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("runHealthcheckWithMessages() error = nil, want API failure")
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("runHealthcheckWithMessages() error = %v, want it to contain %q", err, want)
+	}
+	if statusCode == http.StatusInternalServerError {
+		if strings.Contains(err.Error(), lastCheck) {
+			t.Fatalf("runHealthcheckWithMessages() error = %v, want the generic message without the check timestamp", err)
+		}
+		return
+	}
+	if !strings.Contains(err.Error(), errorMsg) {
+		t.Fatalf("runHealthcheckWithMessages() error = %v, want it to carry the operator error %q", err, errorMsg)
+	}
+	// The timestamp is the operator's only way to tell a live suspension
+	// from a stale api_status.json read right after a restart.
+	if !strings.Contains(err.Error(), lastCheck) {
+		t.Fatalf("runHealthcheckWithMessages() error = %v, want it to carry the persisted last check %q", err, lastCheck)
 	}
 }
 
@@ -1965,54 +1970,22 @@ func TestRunHealthcheckReportsAPIErrorBeforeRSSVerdict(t *testing.T) {
 		wantCode int
 	}{
 		{
-			name: "generic api error wins over the rss verdict",
-			seed: func(t *testing.T, dataDir string) {
-				t.Helper()
-				tracker, err := status.NewTracker(dataDir)
-				if err != nil {
-					t.Fatalf("NewTracker() error = %v", err)
-				}
-				tracker.UpdateAPIStatus(false, 0, "ransomware.live unreachable")
-				if err := tracker.SavePendingChanges(); err != nil {
-					t.Fatalf("SavePendingChanges() error = %v", err)
-				}
-			},
+			name:     "generic api error wins over the rss verdict",
+			seed:     seedGenericAPIHealthError,
 			want:     "ransomware API last check failed: ransomware.live unreachable",
 			notWant:  "enabled RSS feed(s) failed",
 			wantCode: 1,
 		},
 		{
-			name: "401 auth suspension wins over the rss verdict",
-			seed: func(t *testing.T, dataDir string) {
-				t.Helper()
-				tracker, err := status.NewTracker(dataDir)
-				if err != nil {
-					t.Fatalf("NewTracker() error = %v", err)
-				}
-				tracker.UpdateAPIStatusWithErrorInfo(false, 0,
-					"API authentication failed; check api_key and provider access",
-					status.SourceErrorInfo{ErrorCategory: "authentication", StatusCode: http.StatusUnauthorized})
-				if err := tracker.SavePendingChanges(); err != nil {
-					t.Fatalf("SavePendingChanges() error = %v", err)
-				}
-			},
+			name:     "401 auth suspension wins over the rss verdict",
+			seed:     seedAPIAuthHealthSuspension,
 			want:     "ransomware API polling suspended after HTTP 401",
 			notWant:  "enabled RSS feed(s) failed",
 			wantCode: 1,
 		},
 		{
-			name: "dead-letter queue wins over the rss verdict",
-			seed: func(t *testing.T, dataDir string) {
-				t.Helper()
-				tracker, err := status.NewTracker(dataDir)
-				if err != nil {
-					t.Fatalf("NewTracker() error = %v", err)
-				}
-				tracker.MarkRetryDeadLetter("api-item", "discord", "api", "Example Corp", "terminal failure")
-				if err := tracker.SavePendingChanges(); err != nil {
-					t.Fatalf("SavePendingChanges() error = %v", err)
-				}
-			},
+			name:     "dead-letter queue wins over the rss verdict",
+			seed:     seedAPIDeadLetterHealthError,
 			want:     "dead-letter queue has 1 terminal delivery failure(s)",
 			notWant:  "enabled RSS feed(s) failed",
 			wantCode: 1,
@@ -2053,5 +2026,43 @@ func TestRunHealthcheckReportsAPIErrorBeforeRSSVerdict(t *testing.T) {
 				t.Fatalf("healthcheck output reports the RSS verdict before %q:\n%s", tt.want, out.String())
 			}
 		})
+	}
+}
+
+func seedGenericAPIHealthError(t *testing.T, dataDir string) {
+	t.Helper()
+	tracker, err := status.NewTracker(dataDir)
+	if err != nil {
+		t.Fatalf("NewTracker() error = %v", err)
+	}
+	tracker.UpdateAPIStatus(false, 0, "ransomware.live unreachable")
+	if err := tracker.SavePendingChanges(); err != nil {
+		t.Fatalf("SavePendingChanges() error = %v", err)
+	}
+}
+
+func seedAPIAuthHealthSuspension(t *testing.T, dataDir string) {
+	t.Helper()
+	tracker, err := status.NewTracker(dataDir)
+	if err != nil {
+		t.Fatalf("NewTracker() error = %v", err)
+	}
+	tracker.UpdateAPIStatusWithErrorInfo(false, 0,
+		"API authentication failed; check api_key and provider access",
+		status.SourceErrorInfo{ErrorCategory: "authentication", StatusCode: http.StatusUnauthorized})
+	if err := tracker.SavePendingChanges(); err != nil {
+		t.Fatalf("SavePendingChanges() error = %v", err)
+	}
+}
+
+func seedAPIDeadLetterHealthError(t *testing.T, dataDir string) {
+	t.Helper()
+	tracker, err := status.NewTracker(dataDir)
+	if err != nil {
+		t.Fatalf("NewTracker() error = %v", err)
+	}
+	tracker.MarkRetryDeadLetter("api-item", "discord", "api", "Example Corp", "terminal failure")
+	if err := tracker.SavePendingChanges(); err != nil {
+		t.Fatalf("SavePendingChanges() error = %v", err)
 	}
 }
