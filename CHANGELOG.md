@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- The container image is built with Go 1.27.3 on Alpine 3.24.3. This fixes HIGH vulnerabilities in the Go
+  standard library (crypto/x509, crypto/tls, net/http) and in OpenSSL, musl and zlib of the old base images.
+
 ## 1.2.1 - 2026-09-18
 
 ### Improved
