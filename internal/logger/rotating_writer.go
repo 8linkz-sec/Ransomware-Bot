@@ -110,15 +110,21 @@ func (w *rotatingFileWriter) Write(p []byte) (int, error) {
 			return 0, err
 		}
 	}
+	var rotationErr error
 	if w.shouldRotate(len(p)) {
-		if err := w.rotateLocked(time.Now().UTC()); err != nil {
-			return 0, err
+		rotationErr = w.rotateLocked(time.Now().UTC())
+		if rotationErr != nil && w.file == nil {
+			// A failed rename leaves the active path writable; later rotation
+			// stages can also leave it absent. Reopen either way before writing.
+			if err := w.openLocked(); err != nil {
+				return 0, errors.Join(rotationErr, err)
+			}
 		}
 	}
 
 	n, err := w.file.Write(p)
 	w.size += int64(n)
-	return n, err
+	return n, errors.Join(rotationErr, err)
 }
 
 func (w *rotatingFileWriter) Close() error {
