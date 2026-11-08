@@ -267,23 +267,55 @@ func TestSharedWebhookURLGroupsFindsRepeatedEndpointURLs(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := SharedWebhookURLGroups(tc.cfg)
-			if len(got) != len(tc.expect) {
-				t.Fatalf("SharedWebhookURLGroups() = %+v, want %+v", got, tc.expect)
-			}
-			for i, want := range tc.expect {
-				if got[i].Kind != want.Kind {
-					t.Errorf("group[%d].Kind = %q, want %q", i, got[i].Kind, want.Kind)
-				}
-				if got[i].Host != want.Host {
-					t.Errorf("group[%d].Host = %q, want %q", i, got[i].Host, want.Host)
-				}
-				if strings.Join(got[i].EndpointIDs, ", ") != strings.Join(want.EndpointIDs, ", ") {
-					t.Errorf("group[%d].EndpointIDs = %v, want %v", i, got[i].EndpointIDs, want.EndpointIDs)
-				}
-			}
+			assertSharedWebhookURLGroups(t, SharedWebhookURLGroups(tc.cfg), tc.expect)
 		})
 	}
+}
+
+func assertSharedWebhookURLGroups(t *testing.T, got, wantGroups []SharedWebhookURLGroup) {
+	t.Helper()
+	if len(got) != len(wantGroups) {
+		t.Fatalf("SharedWebhookURLGroups() = %+v, want %+v", got, wantGroups)
+	}
+	for i, want := range wantGroups {
+		if got[i].Kind != want.Kind {
+			t.Errorf("group[%d].Kind = %q, want %q", i, got[i].Kind, want.Kind)
+		}
+		if got[i].Host != want.Host {
+			t.Errorf("group[%d].Host = %q, want %q", i, got[i].Host, want.Host)
+		}
+		if strings.Join(got[i].EndpointIDs, ", ") != strings.Join(want.EndpointIDs, ", ") {
+			t.Errorf("group[%d].EndpointIDs = %v, want %v", i, got[i].EndpointIDs, want.EndpointIDs)
+		}
+	}
+}
+
+func assertWebhookWarningFields(t *testing.T, warn *logrus.Entry, index int, want map[string]any) {
+	t.Helper()
+	for field, wantValue := range want {
+		gotValue, ok := warn.Data[field]
+		if !ok {
+			t.Fatalf("WARN[%d] has no field %q; fields = %v", index, field, warn.Data)
+		}
+		if gotValue != wantValue {
+			t.Errorf("WARN[%d] field %q = %v, want %v", index, field, gotValue, wantValue)
+		}
+	}
+}
+
+func assertSharedURLWarnings(t *testing.T, entries []*logrus.Entry, wantWarns []map[string]any, secrets []string) {
+	t.Helper()
+	warns := countSharedURLWarnings(entries)
+	if len(warns) != len(wantWarns) {
+		t.Fatalf("shared-URL WARN count = %d, want %d", len(warns), len(wantWarns))
+	}
+	for i, want := range wantWarns {
+		assertWebhookWarningFields(t, warns[i], i, want)
+		if _, exists := warns[i].Data["platform"]; exists {
+			t.Errorf("WARN[%d] carries a platform field; the group may span platforms", i)
+		}
+	}
+	assertNoWebhookURLLeak(t, entries, secrets...)
 }
 
 func TestValidateConfigWarnsOnceForSharedWebhookURL(t *testing.T) {
@@ -391,26 +423,7 @@ func TestValidateConfigWarnsOnceForSharedWebhookURL(t *testing.T) {
 				t.Fatalf("validateConfig() error = %v, want nil", err)
 			}
 
-			entries := hook.AllEntries()
-			warns := countSharedURLWarnings(entries)
-			if len(warns) != len(tc.wantWarns) {
-				t.Fatalf("shared-URL WARN count = %d, want %d", len(warns), len(tc.wantWarns))
-			}
-			for i, want := range tc.wantWarns {
-				for field, wantValue := range want {
-					gotValue, ok := warns[i].Data[field]
-					if !ok {
-						t.Fatalf("WARN[%d] has no field %q; fields = %v", i, field, warns[i].Data)
-					}
-					if gotValue != wantValue {
-						t.Errorf("WARN[%d] field %q = %v, want %v", i, field, gotValue, wantValue)
-					}
-				}
-				if _, exists := warns[i].Data["platform"]; exists {
-					t.Errorf("WARN[%d] carries a platform field; the group may span platforms", i)
-				}
-			}
-			assertNoWebhookURLLeak(t, entries, tc.wantSecrets...)
+			assertSharedURLWarnings(t, hook.AllEntries(), tc.wantWarns, tc.wantSecrets)
 		})
 	}
 }
@@ -608,24 +621,23 @@ func TestLoadConfigWarnsOnceForSharedWebhookURLAndStillSucceeds(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s() error = %v, want nil (a shared URL must never be rejected)", loader.name, err)
 			}
-			enabled := 0
-			for _, target := range WebhookTargets(cfg) {
-				if target.Webhook.Enabled && strings.TrimSpace(target.Webhook.URL) != "" {
-					enabled++
-				}
-			}
-			if enabled != 2 {
-				t.Fatalf("enabled endpoints = %d, want 2", enabled)
-			}
-
-			warns := countSharedURLWarnings(hook.AllEntries())
-			if len(warns) != 1 {
-				t.Fatalf("shared-URL WARN count = %d, want 1", len(warns))
-			}
-			if got := warns[0].Data["endpoint_ids"]; got != "discord.ransomware, discord.ransomware.2" {
-				t.Fatalf("endpoint_ids = %v, want %q", got, "discord.ransomware, discord.ransomware.2")
-			}
-			assertNoWebhookURLLeak(t, hook.AllEntries(), sharedDiscordToken)
+			assertEnabledWebhookEndpointCount(t, cfg, 2)
+			assertSharedURLWarnings(t, hook.AllEntries(), []map[string]any{{
+				"endpoint_ids": "discord.ransomware, discord.ransomware.2",
+			}}, []string{sharedDiscordToken})
 		})
+	}
+}
+
+func assertEnabledWebhookEndpointCount(t *testing.T, cfg *Config, want int) {
+	t.Helper()
+	enabled := 0
+	for _, target := range WebhookTargets(cfg) {
+		if target.Webhook.Enabled && strings.TrimSpace(target.Webhook.URL) != "" {
+			enabled++
+		}
+	}
+	if enabled != want {
+		t.Fatalf("enabled endpoints = %d, want %d", enabled, want)
 	}
 }

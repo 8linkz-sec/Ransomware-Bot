@@ -12,10 +12,15 @@ import (
 	"github.com/8linkz-sec/Ransomware-News-Bot/internal/keywordmode"
 )
 
-//nolint:gocyclo // long sequential assertion list over every DefaultConfig() field; not a table split candidate
 func TestDefaultConfigValues(t *testing.T) {
 	cfg := DefaultConfig()
+	assertDefaultLoggerAndAPIConfig(t, cfg)
+	assertDefaultRSSAndDeliveryConfig(t, cfg)
+	assertDefaultFormatConfig(t, cfg)
+}
 
+func assertDefaultLoggerAndAPIConfig(t *testing.T, cfg *Config) {
+	t.Helper()
 	if cfg.LogLevel != "INFO" {
 		t.Errorf("expected LogLevel INFO, got %q", cfg.LogLevel)
 	}
@@ -43,6 +48,10 @@ func TestDefaultConfigValues(t *testing.T) {
 	if cfg.APICheckTimeout != 5*time.Minute {
 		t.Errorf("expected APICheckTimeout 5m, got %v", cfg.APICheckTimeout)
 	}
+}
+
+func assertDefaultRSSAndDeliveryConfig(t *testing.T, cfg *Config) {
+	t.Helper()
 	if cfg.RSSPollInterval != 30*time.Minute {
 		t.Errorf("expected RSSPollInterval 30m, got %v", cfg.RSSPollInterval)
 	}
@@ -79,6 +88,10 @@ func TestDefaultConfigValues(t *testing.T) {
 	if cfg.RSSMaxEntriesPerCycle != 100 {
 		t.Errorf("expected RSSMaxEntriesPerCycle 100, got %d", cfg.RSSMaxEntriesPerCycle)
 	}
+}
+
+func assertDefaultFormatConfig(t *testing.T, cfg *Config) {
+	t.Helper()
 	if !cfg.Format.ShowUnicodeFlags {
 		t.Error("expected ShowUnicodeFlags true")
 	}
@@ -806,13 +819,15 @@ func TestValidateConfigSkipsDisabledWebhookFilters(t *testing.T) {
 	}
 }
 
+type webhookFilterValidationCase struct {
+	name         string
+	filters      *WebhookFilters
+	wantErr      bool
+	wantContains []string
+}
+
 func TestValidateWebhookFilters(t *testing.T) {
-	tests := []struct {
-		name         string
-		filters      *WebhookFilters
-		wantErr      bool
-		wantContains []string
-	}{
+	tests := []webhookFilterValidationCase{
 		{
 			name:    "nil filters",
 			filters: nil,
@@ -950,30 +965,35 @@ func TestValidateWebhookFilters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateWebhookFilters("discord.rss", tt.filters)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected validation error")
-				}
-				for _, want := range tt.wantContains {
-					if !strings.Contains(err.Error(), want) {
-						t.Fatalf("error = %q, want substring %q", err, want)
-					}
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected validation error: %v", err)
-			}
-			if tt.name == "valid category filters trim whitespace" {
-				if got := tt.filters.IncludeCategories[0]; got != "Malware" {
-					t.Fatalf("include category = %q, want trimmed", got)
-				}
-				if got := tt.filters.ExcludeCategories[0]; got != "Spam" {
-					t.Fatalf("exclude category = %q, want trimmed", got)
-				}
-			}
+			assertWebhookFilterValidationCase(t, tt)
 		})
+	}
+}
+
+func assertWebhookFilterValidationCase(t *testing.T, tt webhookFilterValidationCase) {
+	t.Helper()
+	err := validateWebhookFilters("discord.rss", tt.filters)
+	if tt.wantErr {
+		if err == nil {
+			t.Fatal("expected validation error")
+		}
+		for _, want := range tt.wantContains {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %q, want substring %q", err, want)
+			}
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if tt.name == "valid category filters trim whitespace" {
+		if got := tt.filters.IncludeCategories[0]; got != "Malware" {
+			t.Fatalf("include category = %q, want trimmed", got)
+		}
+		if got := tt.filters.ExcludeCategories[0]; got != "Spam" {
+			t.Fatalf("exclude category = %q, want trimmed", got)
+		}
 	}
 }
 
@@ -1943,7 +1963,12 @@ func TestLoadGeneralConfig_DurationParsing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadGeneralConfig() returned error: %v", err)
 	}
+	assertLoadedGeneralAPIAndRSSSettings(t, cfg)
+	assertLoadedGeneralDeliverySettings(t, cfg)
+}
 
+func assertLoadedGeneralAPIAndRSSSettings(t *testing.T, cfg *Config) {
+	t.Helper()
 	if cfg.APIPollInterval != 90*time.Minute {
 		t.Errorf("expected APIPollInterval 90m, got %v", cfg.APIPollInterval)
 	}
@@ -1971,6 +1996,10 @@ func TestLoadGeneralConfig_DurationParsing(t *testing.T) {
 	if cfg.RSSRetryDelay != 10*time.Second {
 		t.Errorf("expected RSSRetryDelay 10s, got %v", cfg.RSSRetryDelay)
 	}
+}
+
+func assertLoadedGeneralDeliverySettings(t *testing.T, cfg *Config) {
+	t.Helper()
 	if cfg.DiscordDelay != 500*time.Millisecond {
 		t.Errorf("expected DiscordDelay 500ms, got %v", cfg.DiscordDelay)
 	}
