@@ -106,17 +106,11 @@ func ransomwareSlackBlocks(entry model.RansomwareEntry, formatConfig *notifyfmt.
 	blocks := make([]slackBlock, 0, 12)
 	blocks = appendRansomwareHeaderBlock(blocks, entry, formatConfig)
 
-	// Discord is the leading system (operator decision): formatRansomwareEmbed
-	// unconditionally guarantees a Website field whenever entry.WebsiteURL is
-	// non-empty, even when the operator's field order omits it. Slack must
-	// follow. Inserted before the configured loop, mirroring Discord's
-	// placement, so it has priority under the block-count cap rather than
-	// risking silent loss if a long configured field order fills all
-	// available blocks first.
+	// Match Discord's guaranteed Website field. When the generic order names
+	// Website, place the fallback after its last predecessor shared with the
+	// effective Slack order. Otherwise it remains first, as on Discord.
 	if strings.TrimSpace(entry.WebsiteURL) != "" && !slackRansomwareFieldOrderHasWebsite(fieldOrder) {
-		if field, ok := ransomwareSlackFieldFor(formatfields.FieldWebsite, entry, options); ok {
-			blocks = appendSlackBlock(blocks, field.block(options))
-		}
+		fieldOrder = slackFieldOrderWithWebsiteFallback(fieldOrder, formatConfig)
 	}
 
 	var renderedDiscoveredField bool
@@ -129,10 +123,8 @@ func ransomwareSlackBlocks(entry model.RansomwareEntry, formatConfig *notifyfmt.
 	return appendRansomwareContextBlock(blocks, entry, options, renderedDiscoveredField)
 }
 
-// slackRansomwareFieldOrderHasWebsite reports whether the operator's
-// effective Slack field order already renders the website/url field, so
-// ransomwareSlackBlocks's unconditional fallback (see above) does not add a
-// second one. Mirrors discordRansomwareFieldOrderHasWebsite exactly.
+// slackRansomwareFieldOrderHasWebsite reports whether the effective Slack
+// order already renders website/url, preventing a duplicate fallback.
 func slackRansomwareFieldOrderHasWebsite(fieldOrder []string) bool {
 	for _, name := range fieldOrder {
 		if canonical, ok := formatfields.Normalize(name); ok && canonical == formatfields.FieldWebsite {
@@ -140,6 +132,38 @@ func slackRansomwareFieldOrderHasWebsite(fieldOrder []string) bool {
 		}
 	}
 	return false
+}
+
+func slackFieldOrderWithWebsiteFallback(fieldOrder []string, formatConfig *notifyfmt.FormatOptions) []string {
+	insertAt := 0
+	if formatConfig != nil {
+		websiteAt := -1
+		for i, field := range formatConfig.FieldOrder {
+			if canonical, ok := formatfields.Normalize(field); ok && canonical == formatfields.FieldWebsite {
+				websiteAt = i
+				break
+			}
+		}
+		if websiteAt > 0 {
+			for _, predecessor := range formatConfig.FieldOrder[:websiteAt] {
+				canonical, ok := formatfields.Normalize(predecessor)
+				if !ok {
+					continue
+				}
+				for i, field := range fieldOrder {
+					if shared, ok := formatfields.Normalize(field); ok && shared == canonical {
+						insertAt = i + 1
+						break
+					}
+				}
+			}
+		}
+	}
+
+	withWebsite := make([]string, 0, len(fieldOrder)+1)
+	withWebsite = append(withWebsite, fieldOrder[:insertAt]...)
+	withWebsite = append(withWebsite, formatfields.FieldWebsite)
+	return append(withWebsite, fieldOrder[insertAt:]...)
 }
 
 func appendRansomwareHeaderBlock(
