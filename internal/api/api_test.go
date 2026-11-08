@@ -1498,7 +1498,6 @@ func TestGetLatestEntriesCapsVictimsPerResponse(t *testing.T) {
 	}
 }
 
-//nolint:gocyclo // long sequential integration-style test asserting many response fields; not a table split candidate
 func TestGetJSON_DecodesRansomwareWireResponse(t *testing.T) {
 	// Full ransomwareResponse JSON with multiple entries and all fields
 	responseJSON := `{
@@ -1557,7 +1556,14 @@ func TestGetJSON_DecodesRansomwareWireResponse(t *testing.T) {
 	}
 
 	// Verify first entry
-	v0 := response.Victims[0]
+	assertFirstRansomwareWireVictim(t, response.Victims[0])
+
+	// Verify second entry
+	assertSecondRansomwareWireVictim(t, response.Victims[1])
+}
+
+func assertFirstRansomwareWireVictim(t *testing.T, v0 ransomwareAPIEntry) {
+	t.Helper()
 	if v0.ID != "entry-001" {
 		t.Errorf("Victim[0].ID = %q, want %q", v0.ID, "entry-001")
 	}
@@ -1592,9 +1598,10 @@ func TestGetJSON_DecodesRansomwareWireResponse(t *testing.T) {
 	if v0.Published.Year() != 2025 || v0.Published.Month() != 1 || v0.Published.Day() != 17 {
 		t.Errorf("Victim[0].Published date wrong: %v", v0.Published)
 	}
+}
 
-	// Verify second entry
-	v1 := response.Victims[1]
+func assertSecondRansomwareWireVictim(t *testing.T, v1 ransomwareAPIEntry) {
+	t.Helper()
 	if v1.ID != "entry-002" {
 		t.Errorf("Victim[1].ID = %q, want %q", v1.ID, "entry-002")
 	}
