@@ -11,6 +11,7 @@
 
 - Long Slack messages no longer show broken `&`, `<`, or `>` escapes when shortened.
 - HTML-derived alert text now removes embedded Unicode direction controls before formatting. A previously delivered RSS item without a GUID or usable link may be delivered once more if its title contained these controls, because its fallback dedup key changes.
+- Status `last_updated` timestamps now include the final shared-webhook dedup marker refresh.
 
 ## 1.2.1 - 2026-09-18
 

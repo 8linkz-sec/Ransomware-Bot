@@ -1696,8 +1696,6 @@ func (t *Tracker) markAPIItemSentUnderKey(itemKey, markerDestination, ownerDesti
 		DestinationID: newOwner,
 	}
 	t.indexAPISentItemLocked(compositeKey, t.apiStatus.SentItems[compositeKey])
-	t.apiStatus.LastUpdated = statusNow()
-	t.apiDirty = true
 
 	// Refresh the superseded owner's own primary marker's SentAt AFTER the
 	// write above (not before): on a platform whose clock never ties
@@ -1711,6 +1709,8 @@ func (t *Tracker) markAPIItemSentUnderKey(itemKey, markerDestination, ownerDesti
 	if supersededOwner != "" {
 		t.refreshAPISentItemSentAtLocked(itemKey, supersededOwner)
 	}
+	t.apiStatus.LastUpdated = statusNow()
+	t.apiDirty = true
 }
 
 // refreshAPISentItemSentAtLocked bumps an existing API sent marker's SentAt to
@@ -2062,8 +2062,6 @@ func (t *Tracker) markRSSItemSentUnderKeyLocked(
 		Skipped:       skipped,
 		Derived:       derived,
 	}
-	t.rssStatus.LastUpdated = statusNow()
-	t.rssDirty = true
 
 	// Refresh the superseded owner's own primary marker's SentAt AFTER the
 	// write above, not before -- see markAPIItemSentUnderKey's matching
@@ -2071,6 +2069,8 @@ func (t *Tracker) markRSSItemSentUnderKeyLocked(
 	if supersededOwner != "" {
 		t.refreshRSSSentItemSentAtLocked(itemKey, supersededOwner)
 	}
+	t.rssStatus.LastUpdated = statusNow()
+	t.rssDirty = true
 }
 
 // refreshRSSSentItemSentAtLocked bumps an existing RSS sent marker's SentAt to
