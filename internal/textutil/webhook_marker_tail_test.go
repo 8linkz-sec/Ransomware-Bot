@@ -112,3 +112,35 @@ func TestRedactWebhookSecretsForURLPreservesQuotedURLErrorSyntax(t *testing.T) {
 		})
 	}
 }
+
+func TestRedactWebhookSecretsForURLPreservesBareErrorColon(t *testing.T) {
+	const anchor = "https://chat.example.test/hooks/secretvalue"
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"full URL", "post " + anchor + ": timeout", "post https://chat.example.test/[redacted]: timeout"},
+		{"standalone path", "post /hooks/secretvalue: timeout", "post /[redacted]: timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RedactWebhookSecretsForURL(tc.text, anchor); got != tc.want {
+				t.Fatalf("RedactWebhookSecretsForURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRedactWebhookSecretsForURLConsumesColonSecretTail(t *testing.T) {
+	const anchor = "https://chat.example.test/hooks/secretvalue"
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"full URL", "post " + anchor + ":EXTRASECRET timeout", "post https://chat.example.test/[redacted] timeout"},
+		{"standalone path", "post /hooks/secretvalue:EXTRASECRET timeout", "post /[redacted] timeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RedactWebhookSecretsForURL(tc.text, anchor); got != tc.want {
+				t.Fatalf("RedactWebhookSecretsForURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

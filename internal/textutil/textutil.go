@@ -1063,9 +1063,10 @@ func redactUnparseableWebhookURL(text, normalized string, err error) string {
 // bytes immediately following it. Whitespace is the only safe boundary for an
 // unquoted URL: punctuation such as ')' or a quote can occur inside a path.
 // This prevents a marker plus tail from being parsed as a safe URL by the
-// later generic redactor. For a quoted exact anchor, the syntactic closing
-// quote (and optional colon) is retained only if it is the entire consumed
-// tail. A longer tail is discarded, including any punctuation within it.
+// later generic redactor. A lone colon before whitespace is retained as an
+// error separator. For a quoted exact anchor, the syntactic closing quote
+// (and optional colon) is also retained. Longer tails are discarded, including
+// punctuation within them, because they may extend the secret.
 func replaceAnchoredURLAndTail(text, anchor, marker string) string {
 	if anchor == "" || !strings.Contains(text, anchor) {
 		return text
@@ -1084,15 +1085,18 @@ func replaceAnchoredURLAndTail(text, anchor, marker string) string {
 			end++
 		}
 		out.WriteString(marker)
-		if start > 0 && text[start-1] == '"' {
-			tail := text[start+len(anchor) : end]
-			if tail == `"` || tail == `":` {
-				out.WriteString(tail)
-			}
-		}
+		out.WriteString(preservedAnchoredURLTail(text, start, len(anchor), end))
 		text = text[end:]
 	}
 	return out.String()
+}
+
+func preservedAnchoredURLTail(text string, start, anchorLength, end int) string {
+	tail := text[start+anchorLength : end]
+	if tail == ":" || start > 0 && text[start-1] == '"' && (tail == `"` || tail == `":`) {
+		return tail
+	}
+	return ""
 }
 
 // replaceAnchoredStandaloneAndTail matches a provider's path or query echo
@@ -1115,12 +1119,7 @@ func replaceAnchoredStandaloneAndTail(text, anchor, marker string) string {
 			end++
 		}
 		out.WriteString(marker)
-		if start > 0 && text[start-1] == '"' {
-			tail := text[start+len(anchor) : end]
-			if tail == `"` || tail == `":` {
-				out.WriteString(tail)
-			}
-		}
+		out.WriteString(preservedAnchoredURLTail(text, start, len(anchor), end))
 		text = text[end:]
 	}
 	return out.String()
