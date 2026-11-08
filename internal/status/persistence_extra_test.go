@@ -588,53 +588,11 @@ func TestBackfillRSSContentSignatureSentItemsSkipsSkipMarkers(t *testing.T) {
 	}
 
 	t.Run("legacy record without skipped field is still backfilled", func(t *testing.T) {
-		// Decode the record from JSON that predates the field, so this pins the
-		// wire compatibility ("keep reading the old one"), not just a zero value.
-		legacyJSON := `{"sent_at":"` + published.Format(time.RFC3339Nano) +
-			`","destination_id":"slack.rss.general","item_key":"` + item.Key + `"}`
-		var legacy rssWebhookSentInfo
-		if err := json.Unmarshal([]byte(legacyJSON), &legacy); err != nil {
-			t.Fatalf("Unmarshal(legacy sent record) error = %v", err)
-		}
-		if legacy.Skipped {
-			t.Fatal("a record without a skipped field must decode as Skipped=false")
-		}
-
-		rssState := &rssStatus{
-			ParsedItems: []StoredRSSEntry{item},
-			SentItems: map[string]rssWebhookSentInfo{
-				makeCompositeKey(item.Key, "slack.rss.general"): legacy,
-			},
-		}
-		if got := backfillRSSContentSignatureSentItems(rssState); got != signaturesPerItem {
-			t.Fatalf("legacy backfill = %d, want %d", got, signaturesPerItem)
-		}
+		assertLegacyRSSSendMarkerBackfilled(t, item, published, signaturesPerItem)
 	})
 
 	t.Run("skipped is omitted from send markers and written for skip markers", func(t *testing.T) {
-		// omitempty keeps every real-send record byte-identical to files written
-		// by builds that predate the field.
-		sent, err := json.Marshal(rssWebhookSentInfo{ItemKey: item.Key, SentAt: published})
-		if err != nil {
-			t.Fatalf("Marshal(sent record) error = %v", err)
-		}
-		if strings.Contains(string(sent), "skipped") {
-			t.Fatalf("real send record must not serialise a skipped field: %s", sent)
-		}
-		skipMarker, err := json.Marshal(rssWebhookSentInfo{ItemKey: item.Key, SentAt: published, Skipped: true})
-		if err != nil {
-			t.Fatalf("Marshal(skip record) error = %v", err)
-		}
-		if !strings.Contains(string(skipMarker), `"skipped":true`) {
-			t.Fatalf("skip marker must serialise skipped=true: %s", skipMarker)
-		}
-		var roundTripped rssWebhookSentInfo
-		if err := json.Unmarshal(skipMarker, &roundTripped); err != nil {
-			t.Fatalf("Unmarshal(skip record) error = %v", err)
-		}
-		if !roundTripped.Skipped {
-			t.Fatal("skipped=true did not survive a JSON round-trip")
-		}
+		assertRSSSkipMarkerJSONCompatibility(t, item, published)
 	})
 }
 
@@ -703,86 +661,15 @@ func TestBackfillRSSContentSignatureSentItemsIgnoresDerivedMarkers(t *testing.T)
 	}
 
 	t.Run("derived marker is not expanded into content signatures", func(t *testing.T) {
-		tracker, dir := newTrackerWithParsedItem(t)
-		tracker.MarkRSSItemDedupedForDestination(item.Key, item.Title, item.FeedTitle, destination)
-		reloaded := reload(t, tracker, dir)
-
-		assertNoAliases(t, reloaded, "the derived marker")
-
-		// A derived marker still suppresses and still keeps recovery from
-		// re-delivering the item: only the load-time re-derivation is withheld.
-		if !reloaded.IsRSSItemSentToDestination(item.Key, destination) {
-			t.Fatal("the derived marker stopped suppressing its own item key")
-		}
-		for _, unsent := range reloaded.GetUnsentRSSItemsForDestinationFeedType(destination, feedType, nil) {
-			if unsent.Key == item.Key {
-				t.Fatal("recovery returned an item whose derived marker says it was already delivered")
-			}
-		}
+		assertDerivedMarkerNotExpanded(t, item, destination, feedType, newTrackerWithParsedItem, reload, assertNoAliases)
 	})
 
 	t.Run("skip marker is still not expanded into content signatures", func(t *testing.T) {
-		tracker, dir := newTrackerWithParsedItem(t)
-		tracker.MarkRSSItemSkippedForDestination(item.Key, destination)
-		reloaded := reload(t, tracker, dir)
-
-		assertNoAliases(t, reloaded, "the filter-mismatch skip marker")
+		assertSkipMarkerNotExpanded(t, item, destination, newTrackerWithParsedItem, reload, assertNoAliases)
 	})
 
 	t.Run("record written before either flag existed is still backfilled", func(t *testing.T) {
-		dir := t.TempDir()
-		parsedItem, err := json.Marshal(item)
-		if err != nil {
-			t.Fatalf("Marshal(parsed item) error = %v", err)
-		}
-		// Hand-written status file whose sent_items row omits both flags, so
-		// this pins the wire compatibility, not just a zero value.
-		legacyStatus := `{"last_updated":"` + published.Format(time.RFC3339Nano) +
-			`","feeds":{},"parsed_items":[` + string(parsedItem) +
-			`],"sent_items":{"` + makeCompositeKey(item.Key, destination) +
-			`":{"title":"` + item.Title + `","feed_title":"` + item.FeedTitle +
-			`","sent_at":"` + published.Format(time.RFC3339Nano) +
-			`","destination_id":"` + destination + `","item_key":"` + item.Key + `"}}}`
-		if err := os.WriteFile(filepath.Join(dir, statusRSSFileName), []byte(legacyStatus), 0600); err != nil {
-			t.Fatalf("WriteFile(rss_status.json) error = %v", err)
-		}
-
-		tracker, err := NewTracker(dir)
-		if err != nil {
-			t.Fatalf("NewTracker(legacy file) error = %v", err)
-		}
-		snapshot, ok := tracker.RSSSentItemSnapshot(item.Key, destination)
-		if !ok {
-			t.Fatal("the hand-written sent marker was not loaded")
-		}
-		if snapshot.Skipped || snapshot.Derived {
-			t.Fatalf("a record without either key decoded as skipped %t / derived %t, want both false",
-				snapshot.Skipped, snapshot.Derived)
-		}
-
-		aliases := 0
-		for _, signature := range signatures {
-			if signature == item.Key {
-				continue
-			}
-			if tracker.IsRSSItemSentToDestination(signature, destination) {
-				aliases++
-			}
-		}
-		if aliases == 0 {
-			t.Fatal("an unflagged legacy marker was no longer expanded into content signatures")
-		}
-
-		if err := tracker.SavePendingChanges(); err != nil {
-			t.Fatalf("SavePendingChanges() error = %v", err)
-		}
-		saved, err := os.ReadFile(filepath.Join(dir, statusRSSFileName))
-		if err != nil {
-			t.Fatalf("ReadFile(rss_status.json) error = %v", err)
-		}
-		if strings.Contains(string(saved), `"derived":`) || strings.Contains(string(saved), `"skipped":`) {
-			t.Fatalf("re-saving a file written before the flags existed invented a flag key: %s", saved)
-		}
+		assertUnflaggedRSSMarkerBackfilled(t, item, published, signatures, destination)
 	})
 }
 
@@ -797,103 +684,15 @@ func TestRSSRetentionTreatsDerivedMarkersLikeDeliveries(t *testing.T) {
 	const destination = "slack.rss.general"
 
 	t.Run("age based pruning removes a derived marker like a genuine one", func(t *testing.T) {
-		// Hand-written file so sent_at is genuinely old and "derived": true has
-		// to survive the JSON round-trip to reach the retention pass.
-		dir := t.TempDir()
-		old := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC).Format(time.RFC3339Nano)
-		row := func(itemKey string, derived bool) string {
-			flag := ""
-			if derived {
-				flag = `"derived":true,`
-			}
-			return `"` + makeCompositeKey(itemKey, destination) + `":{` + flag +
-				`"title":"Example Report","feed_title":"Example Feed","sent_at":"` + old +
-				`","destination_id":"` + destination + `","item_key":"` + itemKey + `"}`
-		}
-		legacyStatus := `{"last_updated":"` + old + `","feeds":{},"parsed_items":[],"sent_items":{` +
-			row("genuine-orphan", false) + `,` + row("derived-orphan", true) + `}}`
-		if err := os.WriteFile(filepath.Join(dir, statusRSSFileName), []byte(legacyStatus), 0600); err != nil {
-			t.Fatalf("WriteFile(rss_status.json) error = %v", err)
-		}
-
-		tracker, err := NewTracker(dir)
-		if err != nil {
-			t.Fatalf("NewTracker() error = %v", err)
-		}
-		snapshot, ok := tracker.RSSSentItemSnapshot("derived-orphan", destination)
-		if !ok || !snapshot.Derived {
-			t.Fatalf("derived marker did not survive the load: found %t, derived %t", ok, snapshot.Derived)
-		}
-
-		policy := DefaultRetentionPolicy()
-		policy.RSSParsedMaxAge = time.Hour
-		tracker.UpdateRetention(policy)
-		tracker.CleanupOldEntriesForRSSDestinations([]string{destination})
-
-		for _, itemKey := range []string{"genuine-orphan", "derived-orphan"} {
-			if _, ok := tracker.RSSSentItemSnapshot(itemKey, destination); ok {
-				t.Fatalf("sent marker %q outlived rss_parsed_max_age; a derived marker must age out on exactly the same schedule as a delivery marker", itemKey)
-			}
-		}
+		assertDerivedMarkerAgePruning(t, destination)
 	})
 
 	t.Run("count cap prunes derived markers like genuine ones", func(t *testing.T) {
-		policy := DefaultRetentionPolicy()
-		policy.MaxRSSSentItems = 1
-		tracker := NewMemoryTrackerWithRetention(policy)
-
-		now := statusNow().Format(time.RFC3339Nano)
-		tracker.MarkRSSItemParsed("https://f.test/feed.xml", "protected", StoredRSSEntry{Title: "P", Published: now})
-		tracker.MarkRSSItemSentToDestination("protected", "P", "Feed", destination)
-		// Both orphans are derived: under a retention pass that exempts derived
-		// markers, neither is a removal candidate and both survive the cap.
-		tracker.MarkRSSItemDedupedForDestination("derived-orphan-1", "D1", "Feed", destination)
-		tracker.MarkRSSItemDedupedForDestination("derived-orphan-2", "D2", "Feed", destination)
-
-		tracker.CleanupOldEntriesForRSSDestinations([]string{destination})
-
-		if _, ok := tracker.RSSSentItemSnapshot("protected", destination); !ok {
-			t.Fatal("the marker of a live parsed row was pruned by the count cap")
-		}
-		for _, itemKey := range []string{"derived-orphan-1", "derived-orphan-2"} {
-			if _, ok := tracker.RSSSentItemSnapshot(itemKey, destination); ok {
-				t.Fatalf("derived marker %q survived count-based pruning; MaxRSSSentItems must count and evict it exactly like a delivery marker", itemKey)
-			}
-		}
+		assertDerivedMarkerCountPruning(t, destination)
 	})
 
 	t.Run("evicting a parsed row removes its derived marker with it", func(t *testing.T) {
-		policy := DefaultRetentionPolicy()
-		policy.MaxRSSParsedItems = 1
-		tracker := NewMemoryTrackerWithRetention(policy)
-
-		older := StoredRSSEntry{
-			Key: "older", FeedURL: "https://f.test/feed.xml", Title: "Older",
-			Published: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
-		}
-		newer := StoredRSSEntry{
-			Key: "newer", FeedURL: "https://f.test/feed.xml", Title: "Newer",
-			Published: statusNow().Format(time.RFC3339Nano),
-		}
-		tracker.MarkRSSItemParsed(older.FeedURL, older.Key, older)
-		tracker.MarkRSSItemParsed(newer.FeedURL, newer.Key, newer)
-		// A derived marker counts as delivered, so the older row is eligible for
-		// eviction -- and the row it owns must go with it.
-		tracker.MarkRSSItemDedupedForDestination(older.Key, older.Title, "Feed", destination)
-		tracker.MarkRSSItemSentToDestination(newer.Key, newer.Title, "Feed", destination)
-
-		tracker.CleanupOldEntriesForRSSDestinations([]string{destination})
-
-		keys := rssItemKeys(tracker.RSSParsedItemsSnapshot())
-		if len(keys) != 1 || keys[0] != newer.Key {
-			t.Fatalf("parsed items after the cap = %v, want [%s]; a derived marker must make its row fully delivered", keys, newer.Key)
-		}
-		if _, ok := tracker.RSSSentItemSnapshot(older.Key, destination); ok {
-			t.Fatal("the derived marker outlived the parsed row it belongs to, leaving an orphaned suppression behind")
-		}
-		if _, ok := tracker.RSSSentItemSnapshot(newer.Key, destination); !ok {
-			t.Fatal("the surviving row's delivery marker was removed")
-		}
+		assertDerivedMarkerParsedRowEviction(t, destination)
 	})
 }
 
@@ -971,5 +770,251 @@ func TestSavePendingChangesPersistsAttemptBudgetDeadLetter(t *testing.T) {
 	}
 	if deadLetters[0].DestinationID != "discord.ransomware" {
 		t.Fatalf("reloaded DestinationID = %q, want %q", deadLetters[0].DestinationID, "discord.ransomware")
+	}
+}
+
+func assertDerivedMarkerNotExpanded(t *testing.T, item StoredRSSEntry, destination, feedType string, newTrackerWithParsedItem func(*testing.T) (*Tracker, string), reload func(*testing.T, *Tracker, string) *Tracker, assertNoAliases func(*testing.T, *Tracker, string)) {
+	t.Helper()
+	tracker, dir := newTrackerWithParsedItem(t)
+	tracker.MarkRSSItemDedupedForDestination(item.Key, item.Title, item.FeedTitle, destination)
+	reloaded := reload(t, tracker, dir)
+
+	assertNoAliases(t, reloaded, "the derived marker")
+
+	// A derived marker still suppresses and still keeps recovery from
+	// re-delivering the item: only the load-time re-derivation is withheld.
+	if !reloaded.IsRSSItemSentToDestination(item.Key, destination) {
+		t.Fatal("the derived marker stopped suppressing its own item key")
+	}
+	for _, unsent := range reloaded.GetUnsentRSSItemsForDestinationFeedType(destination, feedType, nil) {
+		if unsent.Key == item.Key {
+			t.Fatal("recovery returned an item whose derived marker says it was already delivered")
+		}
+	}
+}
+
+func assertSkipMarkerNotExpanded(t *testing.T, item StoredRSSEntry, destination string, newTrackerWithParsedItem func(*testing.T) (*Tracker, string), reload func(*testing.T, *Tracker, string) *Tracker, assertNoAliases func(*testing.T, *Tracker, string)) {
+	t.Helper()
+	tracker, dir := newTrackerWithParsedItem(t)
+	tracker.MarkRSSItemSkippedForDestination(item.Key, destination)
+	reloaded := reload(t, tracker, dir)
+
+	assertNoAliases(t, reloaded, "the filter-mismatch skip marker")
+}
+
+func assertUnflaggedRSSMarkerBackfilled(t *testing.T, item StoredRSSEntry, published time.Time, signatures []string, destination string) {
+	t.Helper()
+	dir := t.TempDir()
+	parsedItem, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("Marshal(parsed item) error = %v", err)
+	}
+	// Hand-written status file whose sent_items row omits both flags, so
+	// this pins the wire compatibility, not just a zero value.
+	legacyStatus := `{"last_updated":"` + published.Format(time.RFC3339Nano) +
+		`","feeds":{},"parsed_items":[` + string(parsedItem) +
+		`],"sent_items":{"` + makeCompositeKey(item.Key, destination) +
+		`":{"title":"` + item.Title + `","feed_title":"` + item.FeedTitle +
+		`","sent_at":"` + published.Format(time.RFC3339Nano) +
+		`","destination_id":"` + destination + `","item_key":"` + item.Key + `"}}}`
+	if err := os.WriteFile(filepath.Join(dir, statusRSSFileName), []byte(legacyStatus), 0600); err != nil {
+		t.Fatalf("WriteFile(rss_status.json) error = %v", err)
+	}
+
+	tracker, err := NewTracker(dir)
+	if err != nil {
+		t.Fatalf("NewTracker(legacy file) error = %v", err)
+	}
+	snapshot, ok := tracker.RSSSentItemSnapshot(item.Key, destination)
+	if !ok {
+		t.Fatal("the hand-written sent marker was not loaded")
+	}
+	if snapshot.Skipped || snapshot.Derived {
+		t.Fatalf("a record without either key decoded as skipped %t / derived %t, want both false",
+			snapshot.Skipped, snapshot.Derived)
+	}
+
+	assertUnflaggedRSSAliasesBackfilled(t, tracker, item, signatures, destination)
+
+	if err := tracker.SavePendingChanges(); err != nil {
+		t.Fatalf("SavePendingChanges() error = %v", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, statusRSSFileName))
+	if err != nil {
+		t.Fatalf("ReadFile(rss_status.json) error = %v", err)
+	}
+	if strings.Contains(string(saved), `"derived":`) || strings.Contains(string(saved), `"skipped":`) {
+		t.Fatalf("re-saving a file written before the flags existed invented a flag key: %s", saved)
+	}
+}
+
+func assertUnflaggedRSSAliasesBackfilled(t *testing.T, tracker *Tracker, item StoredRSSEntry, signatures []string, destination string) {
+	t.Helper()
+	aliases := 0
+	for _, signature := range signatures {
+		if signature == item.Key {
+			continue
+		}
+		if tracker.IsRSSItemSentToDestination(signature, destination) {
+			aliases++
+		}
+	}
+	if aliases == 0 {
+		t.Fatal("an unflagged legacy marker was no longer expanded into content signatures")
+	}
+}
+
+func assertDerivedMarkerAgePruning(t *testing.T, destination string) {
+	t.Helper()
+	// Hand-written file so sent_at is genuinely old and "derived": true has
+	// to survive the JSON round-trip to reach the retention pass.
+	dir := t.TempDir()
+	old := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC).Format(time.RFC3339Nano)
+	row := func(itemKey string, derived bool) string {
+		flag := ""
+		if derived {
+			flag = `"derived":true,`
+		}
+		return `"` + makeCompositeKey(itemKey, destination) + `":{` + flag +
+			`"title":"Example Report","feed_title":"Example Feed","sent_at":"` + old +
+			`","destination_id":"` + destination + `","item_key":"` + itemKey + `"}`
+	}
+	legacyStatus := `{"last_updated":"` + old + `","feeds":{},"parsed_items":[],"sent_items":{` +
+		row("genuine-orphan", false) + `,` + row("derived-orphan", true) + `}}`
+	if err := os.WriteFile(filepath.Join(dir, statusRSSFileName), []byte(legacyStatus), 0600); err != nil {
+		t.Fatalf("WriteFile(rss_status.json) error = %v", err)
+	}
+
+	tracker, err := NewTracker(dir)
+	if err != nil {
+		t.Fatalf("NewTracker() error = %v", err)
+	}
+	snapshot, ok := tracker.RSSSentItemSnapshot("derived-orphan", destination)
+	if !ok || !snapshot.Derived {
+		t.Fatalf("derived marker did not survive the load: found %t, derived %t", ok, snapshot.Derived)
+	}
+
+	policy := DefaultRetentionPolicy()
+	policy.RSSParsedMaxAge = time.Hour
+	tracker.UpdateRetention(policy)
+	tracker.CleanupOldEntriesForRSSDestinations([]string{destination})
+
+	for _, itemKey := range []string{"genuine-orphan", "derived-orphan"} {
+		if _, ok := tracker.RSSSentItemSnapshot(itemKey, destination); ok {
+			t.Fatalf("sent marker %q outlived rss_parsed_max_age; a derived marker must age out on exactly the same schedule as a delivery marker", itemKey)
+		}
+	}
+}
+
+func assertDerivedMarkerCountPruning(t *testing.T, destination string) {
+	t.Helper()
+	policy := DefaultRetentionPolicy()
+	policy.MaxRSSSentItems = 1
+	tracker := NewMemoryTrackerWithRetention(policy)
+
+	now := statusNow().Format(time.RFC3339Nano)
+	tracker.MarkRSSItemParsed("https://f.test/feed.xml", "protected", StoredRSSEntry{Title: "P", Published: now})
+	tracker.MarkRSSItemSentToDestination("protected", "P", "Feed", destination)
+	// Both orphans are derived: under a retention pass that exempts derived
+	// markers, neither is a removal candidate and both survive the cap.
+	tracker.MarkRSSItemDedupedForDestination("derived-orphan-1", "D1", "Feed", destination)
+	tracker.MarkRSSItemDedupedForDestination("derived-orphan-2", "D2", "Feed", destination)
+
+	tracker.CleanupOldEntriesForRSSDestinations([]string{destination})
+
+	if _, ok := tracker.RSSSentItemSnapshot("protected", destination); !ok {
+		t.Fatal("the marker of a live parsed row was pruned by the count cap")
+	}
+	for _, itemKey := range []string{"derived-orphan-1", "derived-orphan-2"} {
+		if _, ok := tracker.RSSSentItemSnapshot(itemKey, destination); ok {
+			t.Fatalf("derived marker %q survived count-based pruning; MaxRSSSentItems must count and evict it exactly like a delivery marker", itemKey)
+		}
+	}
+}
+
+func assertDerivedMarkerParsedRowEviction(t *testing.T, destination string) {
+	t.Helper()
+	policy := DefaultRetentionPolicy()
+	policy.MaxRSSParsedItems = 1
+	tracker := NewMemoryTrackerWithRetention(policy)
+
+	older := StoredRSSEntry{
+		Key: "older", FeedURL: "https://f.test/feed.xml", Title: "Older",
+		Published: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339Nano),
+	}
+	newer := StoredRSSEntry{
+		Key: "newer", FeedURL: "https://f.test/feed.xml", Title: "Newer",
+		Published: statusNow().Format(time.RFC3339Nano),
+	}
+	tracker.MarkRSSItemParsed(older.FeedURL, older.Key, older)
+	tracker.MarkRSSItemParsed(newer.FeedURL, newer.Key, newer)
+	// A derived marker counts as delivered, so the older row is eligible for
+	// eviction -- and the row it owns must go with it.
+	tracker.MarkRSSItemDedupedForDestination(older.Key, older.Title, "Feed", destination)
+	tracker.MarkRSSItemSentToDestination(newer.Key, newer.Title, "Feed", destination)
+
+	tracker.CleanupOldEntriesForRSSDestinations([]string{destination})
+
+	keys := rssItemKeys(tracker.RSSParsedItemsSnapshot())
+	if len(keys) != 1 || keys[0] != newer.Key {
+		t.Fatalf("parsed items after the cap = %v, want [%s]; a derived marker must make its row fully delivered", keys, newer.Key)
+	}
+	if _, ok := tracker.RSSSentItemSnapshot(older.Key, destination); ok {
+		t.Fatal("the derived marker outlived the parsed row it belongs to, leaving an orphaned suppression behind")
+	}
+	if _, ok := tracker.RSSSentItemSnapshot(newer.Key, destination); !ok {
+		t.Fatal("the surviving row's delivery marker was removed")
+	}
+}
+
+func assertLegacyRSSSendMarkerBackfilled(t *testing.T, item StoredRSSEntry, published time.Time, signaturesPerItem int) {
+	t.Helper()
+	// Decode the record from JSON that predates the field, so this pins the
+	// wire compatibility ("keep reading the old one"), not just a zero value.
+	legacyJSON := `{"sent_at":"` + published.Format(time.RFC3339Nano) +
+		`","destination_id":"slack.rss.general","item_key":"` + item.Key + `"}`
+	var legacy rssWebhookSentInfo
+	if err := json.Unmarshal([]byte(legacyJSON), &legacy); err != nil {
+		t.Fatalf("Unmarshal(legacy sent record) error = %v", err)
+	}
+	if legacy.Skipped {
+		t.Fatal("a record without a skipped field must decode as Skipped=false")
+	}
+
+	rssState := &rssStatus{
+		ParsedItems: []StoredRSSEntry{item},
+		SentItems: map[string]rssWebhookSentInfo{
+			makeCompositeKey(item.Key, "slack.rss.general"): legacy,
+		},
+	}
+	if got := backfillRSSContentSignatureSentItems(rssState); got != signaturesPerItem {
+		t.Fatalf("legacy backfill = %d, want %d", got, signaturesPerItem)
+	}
+}
+
+func assertRSSSkipMarkerJSONCompatibility(t *testing.T, item StoredRSSEntry, published time.Time) {
+	t.Helper()
+	// omitempty keeps every real-send record byte-identical to files written
+	// by builds that predate the field.
+	sent, err := json.Marshal(rssWebhookSentInfo{ItemKey: item.Key, SentAt: published})
+	if err != nil {
+		t.Fatalf("Marshal(sent record) error = %v", err)
+	}
+	if strings.Contains(string(sent), "skipped") {
+		t.Fatalf("real send record must not serialise a skipped field: %s", sent)
+	}
+	skipMarker, err := json.Marshal(rssWebhookSentInfo{ItemKey: item.Key, SentAt: published, Skipped: true})
+	if err != nil {
+		t.Fatalf("Marshal(skip record) error = %v", err)
+	}
+	if !strings.Contains(string(skipMarker), `"skipped":true`) {
+		t.Fatalf("skip marker must serialise skipped=true: %s", skipMarker)
+	}
+	var roundTripped rssWebhookSentInfo
+	if err := json.Unmarshal(skipMarker, &roundTripped); err != nil {
+		t.Fatalf("Unmarshal(skip record) error = %v", err)
+	}
+	if !roundTripped.Skipped {
+		t.Fatal("skipped=true did not survive a JSON round-trip")
 	}
 }
