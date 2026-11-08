@@ -212,6 +212,16 @@ func TestRSSSentItemSnapshotFallsBackToLegacyDestinations(t *testing.T) {
 	}
 }
 
+type rssSentSnapshotScenario struct {
+	name          string
+	mark          func(tracker *Tracker)
+	legacy        []string
+	wantSkipped   bool
+	wantDerived   bool
+	wantTitle     string
+	wantFeedTitle string
+}
+
 // TestRSSSentItemSnapshotReportsDerivedMarkers is the contract test for the
 // additive "derived" flag: RSSSentItemSnapshot is a bare struct conversion of
 // rssWebhookSentInfo, so the two structs must keep identical field names, types
@@ -234,15 +244,7 @@ func TestRSSSentItemSnapshotReportsDerivedMarkers(t *testing.T) {
 		ParsedAt:    published.Format(time.RFC3339Nano),
 	}
 
-	tests := []struct {
-		name          string
-		mark          func(tracker *Tracker)
-		legacy        []string
-		wantSkipped   bool
-		wantDerived   bool
-		wantTitle     string
-		wantFeedTitle string
-	}{
+	tests := []rssSentSnapshotScenario{
 		{
 			name: "genuine delivery marker",
 			mark: func(tracker *Tracker) {
@@ -281,61 +283,71 @@ func TestRSSSentItemSnapshotReportsDerivedMarkers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tracker := NewMemoryTracker()
-			tt.mark(tracker)
-
-			snapshot, ok := tracker.RSSSentItemSnapshot(item.Key, destination, tt.legacy...)
-			if !ok {
-				t.Fatal("RSSSentItemSnapshot() found no marker after it was written")
-			}
-			if snapshot.Skipped != tt.wantSkipped || snapshot.Derived != tt.wantDerived {
-				t.Fatalf("snapshot flags = skipped %t / derived %t, want skipped %t / derived %t",
-					snapshot.Skipped, snapshot.Derived, tt.wantSkipped, tt.wantDerived)
-			}
-			if snapshot.Title != tt.wantTitle || snapshot.FeedTitle != tt.wantFeedTitle {
-				t.Fatalf("snapshot titles = %q / %q, want %q / %q",
-					snapshot.Title, snapshot.FeedTitle, tt.wantTitle, tt.wantFeedTitle)
-			}
-			if snapshot.ItemKey != item.Key {
-				t.Fatalf("snapshot item key = %q, want %q", snapshot.ItemKey, item.Key)
-			}
+			assertRSSSentSnapshotScenario(t, item.Key, destination, tt)
 		})
 	}
 
 	t.Run("backfill alias of a genuine delivery stays unflagged", func(t *testing.T) {
-		dir := t.TempDir()
-		tracker, err := NewTracker(dir)
-		if err != nil {
-			t.Fatalf("NewTracker() error = %v", err)
-		}
-		tracker.MarkRSSItemsParsed(item.FeedURL, map[string]StoredRSSEntry{item.Key: item})
-		tracker.MarkRSSItemSentToDestination(item.Key, item.Title, item.FeedTitle, destination)
-		if err := tracker.SavePendingChanges(); err != nil {
-			t.Fatalf("SavePendingChanges() error = %v", err)
-		}
-
-		reloaded, err := NewTracker(dir)
-		if err != nil {
-			t.Fatalf("NewTracker(reload) error = %v", err)
-		}
-		entry, err := RSSEntryFromStored(item)
-		if err != nil {
-			t.Fatalf("RSSEntryFromStored() error = %v", err)
-		}
-		alias := rss.GenerateEntryContentSignature(entry)
-
-		snapshot, ok := reloaded.RSSSentItemSnapshot(alias, destination)
-		if !ok {
-			t.Fatal("the load-time backfill created no content-signature alias for a genuine delivery")
-		}
-		if snapshot.Skipped || snapshot.Derived {
-			t.Fatalf("backfill alias flags = skipped %t / derived %t, want both false", snapshot.Skipped, snapshot.Derived)
-		}
-		if snapshot.Title != item.Title || snapshot.FeedTitle != item.FeedTitle {
-			t.Fatalf("backfill alias titles = %q / %q, want %q / %q",
-				snapshot.Title, snapshot.FeedTitle, item.Title, item.FeedTitle)
-		}
+		assertRSSBackfillAliasSnapshot(t, item, destination)
 	})
+}
+
+func assertRSSSentSnapshotScenario(t *testing.T, itemKey, destination string, scenario rssSentSnapshotScenario) {
+	t.Helper()
+	tracker := NewMemoryTracker()
+	scenario.mark(tracker)
+
+	snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, destination, scenario.legacy...)
+	if !ok {
+		t.Fatal("RSSSentItemSnapshot() found no marker after it was written")
+	}
+	if snapshot.Skipped != scenario.wantSkipped || snapshot.Derived != scenario.wantDerived {
+		t.Fatalf("snapshot flags = skipped %t / derived %t, want skipped %t / derived %t",
+			snapshot.Skipped, snapshot.Derived, scenario.wantSkipped, scenario.wantDerived)
+	}
+	if snapshot.Title != scenario.wantTitle || snapshot.FeedTitle != scenario.wantFeedTitle {
+		t.Fatalf("snapshot titles = %q / %q, want %q / %q",
+			snapshot.Title, snapshot.FeedTitle, scenario.wantTitle, scenario.wantFeedTitle)
+	}
+	if snapshot.ItemKey != itemKey {
+		t.Fatalf("snapshot item key = %q, want %q", snapshot.ItemKey, itemKey)
+	}
+}
+
+func assertRSSBackfillAliasSnapshot(t *testing.T, item StoredRSSEntry, destination string) {
+	t.Helper()
+	dir := t.TempDir()
+	tracker, err := NewTracker(dir)
+	if err != nil {
+		t.Fatalf("NewTracker() error = %v", err)
+	}
+	tracker.MarkRSSItemsParsed(item.FeedURL, map[string]StoredRSSEntry{item.Key: item})
+	tracker.MarkRSSItemSentToDestination(item.Key, item.Title, item.FeedTitle, destination)
+	if err := tracker.SavePendingChanges(); err != nil {
+		t.Fatalf("SavePendingChanges() error = %v", err)
+	}
+
+	reloaded, err := NewTracker(dir)
+	if err != nil {
+		t.Fatalf("NewTracker(reload) error = %v", err)
+	}
+	entry, err := RSSEntryFromStored(item)
+	if err != nil {
+		t.Fatalf("RSSEntryFromStored() error = %v", err)
+	}
+	alias := rss.GenerateEntryContentSignature(entry)
+
+	snapshot, ok := reloaded.RSSSentItemSnapshot(alias, destination)
+	if !ok {
+		t.Fatal("the load-time backfill created no content-signature alias for a genuine delivery")
+	}
+	if snapshot.Skipped || snapshot.Derived {
+		t.Fatalf("backfill alias flags = skipped %t / derived %t, want both false", snapshot.Skipped, snapshot.Derived)
+	}
+	if snapshot.Title != item.Title || snapshot.FeedTitle != item.FeedTitle {
+		t.Fatalf("backfill alias titles = %q / %q, want %q / %q",
+			snapshot.Title, snapshot.FeedTitle, item.Title, item.FeedTitle)
+	}
 }
 
 func TestRecordDeliveryAuditEventNilTrackerIsSafe(t *testing.T) {
@@ -555,6 +567,15 @@ func TestIsAPIItemSentToDestinationIgnoresBlankAndUnknownLegacy(t *testing.T) {
 	}
 }
 
+type apiLegacyAliasScenario struct {
+	name           string
+	writeAlias     func(tracker *Tracker)
+	wantAliasOwner string
+	migrateAs      string
+	ask            string
+	want           bool
+}
+
 func TestAPILegacyAliasIsNotAdoptedBySiblingDestination(t *testing.T) {
 	const (
 		itemKey    = "api-item-shared"
@@ -563,14 +584,7 @@ func TestAPILegacyAliasIsNotAdoptedBySiblingDestination(t *testing.T) {
 		sibling    = "slack.ransomware.2"
 	)
 
-	tests := []struct {
-		name           string
-		writeAlias     func(tracker *Tracker)
-		wantAliasOwner string
-		migrateAs      string
-		ask            string
-		want           bool
-	}{
+	tests := []apiLegacyAliasScenario{
 		{
 			name: "owner stamped alias is not adopted by sibling destination",
 			writeAlias: func(tracker *Tracker) {
@@ -614,39 +628,44 @@ func TestAPILegacyAliasIsNotAdoptedBySiblingDestination(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tracker := NewMemoryTracker()
-			tt.writeAlias(tracker)
-			// The alias marker itself carries the owner stamp the read side
-			// discriminates on; assert it before any migration rewrites state.
-			aliasSnapshot, ok := tracker.APISentItemSnapshot(itemKey, webhookURL)
-			if !ok {
-				t.Fatal("no sent marker stored under the legacy webhook-URL key")
-			}
-			if aliasSnapshot.DestinationID != tt.wantAliasOwner {
-				t.Fatalf("legacy alias DestinationID = %q, want %q", aliasSnapshot.DestinationID, tt.wantAliasOwner)
-			}
-			if tt.migrateAs != "" && !tracker.IsAPIItemSentToDestination(itemKey, tt.migrateAs, webhookURL) {
-				t.Fatalf("IsAPIItemSentToDestination(%q) = false, want the legacy alias to migrate first", tt.migrateAs)
-			}
-
-			if got := tracker.IsAPIItemSentToDestination(itemKey, tt.ask, webhookURL); got != tt.want {
-				t.Fatalf("IsAPIItemSentToDestination(%q) = %v, want %v", tt.ask, got, tt.want)
-			}
-			snapshot, ok := tracker.APISentItemSnapshot(itemKey, tt.ask)
-			if ok != tt.want {
-				t.Fatalf("APISentItemSnapshot(%q) ok = %v (%+v), want %v", tt.ask, ok, snapshot, tt.want)
-			}
-			// Migration never rewrites the alias itself, so a true legacy
-			// marker stays adoptable by every destination on that URL.
-			aliasAfter, ok := tracker.APISentItemSnapshot(itemKey, webhookURL)
-			if !ok {
-				t.Fatal("legacy webhook-URL marker disappeared")
-			}
-			if aliasAfter.DestinationID != tt.wantAliasOwner {
-				t.Fatalf("legacy alias DestinationID after the read = %q, want it unchanged at %q",
-					aliasAfter.DestinationID, tt.wantAliasOwner)
-			}
+			assertAPILegacyAliasScenario(t, itemKey, webhookURL, tt)
 		})
+	}
+}
+
+func assertAPILegacyAliasScenario(t *testing.T, itemKey, webhookURL string, scenario apiLegacyAliasScenario) {
+	t.Helper()
+	tracker := NewMemoryTracker()
+	scenario.writeAlias(tracker)
+	// The alias marker itself carries the owner stamp the read side
+	// discriminates on; assert it before any migration rewrites state.
+	aliasSnapshot, ok := tracker.APISentItemSnapshot(itemKey, webhookURL)
+	if !ok {
+		t.Fatal("no sent marker stored under the legacy webhook-URL key")
+	}
+	if aliasSnapshot.DestinationID != scenario.wantAliasOwner {
+		t.Fatalf("legacy alias DestinationID = %q, want %q", aliasSnapshot.DestinationID, scenario.wantAliasOwner)
+	}
+	if scenario.migrateAs != "" && !tracker.IsAPIItemSentToDestination(itemKey, scenario.migrateAs, webhookURL) {
+		t.Fatalf("IsAPIItemSentToDestination(%q) = false, want the legacy alias to migrate first", scenario.migrateAs)
+	}
+
+	if got := tracker.IsAPIItemSentToDestination(itemKey, scenario.ask, webhookURL); got != scenario.want {
+		t.Fatalf("IsAPIItemSentToDestination(%q) = %v, want %v", scenario.ask, got, scenario.want)
+	}
+	snapshot, ok := tracker.APISentItemSnapshot(itemKey, scenario.ask)
+	if ok != scenario.want {
+		t.Fatalf("APISentItemSnapshot(%q) ok = %v (%+v), want %v", scenario.ask, ok, snapshot, scenario.want)
+	}
+	// Migration never rewrites the alias itself, so a true legacy
+	// marker stays adoptable by every destination on that URL.
+	aliasAfter, ok := tracker.APISentItemSnapshot(itemKey, webhookURL)
+	if !ok {
+		t.Fatal("legacy webhook-URL marker disappeared")
+	}
+	if aliasAfter.DestinationID != scenario.wantAliasOwner {
+		t.Fatalf("legacy alias DestinationID after the read = %q, want it unchanged at %q",
+			aliasAfter.DestinationID, scenario.wantAliasOwner)
 	}
 }
 
@@ -1449,11 +1468,6 @@ func TestUpdateFeedStatusForcesRefetchAfterNotModifiedDurationElapses(t *testing
 // the one already stored: identical (echoed) is not fresh evidence, a
 // genuine change is.
 func TestUpdateFeedStatusEchoedValidatorStillAdvancesTheStreak(t *testing.T) {
-	pastDue := func() *time.Time {
-		t := statusNow().Add(-(maxConsecutiveNotModifiedDuration + time.Minute))
-		return &t
-	}
-
 	cases := []struct {
 		name   string
 		seeded rss.FeedHTTPValidators
@@ -1478,40 +1492,46 @@ func TestUpdateFeedStatusEchoedValidatorStillAdvancesTheStreak(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			feedURL := "https://example.test/echoed-validator.xml"
-			tracker := NewMemoryTracker()
-			tracker.UpdateFeedStatusWithErrorInfoAndValidators(feedURL, true, 1, "", SourceErrorInfo{}, tc.seeded)
-
-			// Three polls, each echoing back exactly what was sent -- not the
-			// bare, header-less 304 the other tests in this file drive.
-			for i := 0; i < 3; i++ {
-				tracker.UpdateFeedStatusWithErrorInfoAndValidators(feedURL, true, 0, "", SourceErrorInfo{}, tc.echoed)
-			}
-			info, ok := tracker.GetRSSFeedInfo(feedURL)
-			if !ok {
-				t.Fatalf("GetRSSFeedInfo() ok = false, want true")
-			}
-			if info.ConsecutiveNotModified != 3 {
-				t.Fatalf("ConsecutiveNotModified after 3 echoed polls = %d, want 3 (echoing must still advance the streak)", info.ConsecutiveNotModified)
-			}
-			if info.ConsecutiveNotModifiedSince == nil {
-				t.Fatalf("ConsecutiveNotModifiedSince after echoed polls = nil, want set")
-			}
-
-			// Push the recorded streak start past the trip duration and poll
-			// once more with the same echoed validator: the forced refetch
-			// must still fire, proving the streak was genuinely advancing, not
-			// stuck at 0 the way the pre-fix empty-only guard left it.
-			feedInfo := tracker.rssStatus.Feeds[feedURL]
-			feedInfo.ConsecutiveNotModifiedSince = pastDue()
-			tracker.rssStatus.Feeds[feedURL] = feedInfo
-
-			tracker.UpdateFeedStatusWithErrorInfoAndValidators(feedURL, true, 0, "", SourceErrorInfo{}, tc.echoed)
-			got := tracker.GetRSSFeedHTTPValidators([]string{feedURL})
-			if _, exists := got[feedURL]; exists {
-				t.Fatalf("validators after the duration elapsed with an echoed validator = %+v, want the feed absent (forced refetch)", got[feedURL])
-			}
+			assertEchoedValidatorAdvancesStreak(t, tc.seeded, tc.echoed)
 		})
+	}
+}
+
+func assertEchoedValidatorAdvancesStreak(t *testing.T, seeded, echoed rss.FeedHTTPValidators) {
+	t.Helper()
+	feedURL := "https://example.test/echoed-validator.xml"
+	tracker := NewMemoryTracker()
+	tracker.UpdateFeedStatusWithErrorInfoAndValidators(feedURL, true, 1, "", SourceErrorInfo{}, seeded)
+
+	// Three polls, each echoing back exactly what was sent -- not the
+	// bare, header-less 304 the other tests in this file drive.
+	for i := 0; i < 3; i++ {
+		tracker.UpdateFeedStatusWithErrorInfoAndValidators(feedURL, true, 0, "", SourceErrorInfo{}, echoed)
+	}
+	info, ok := tracker.GetRSSFeedInfo(feedURL)
+	if !ok {
+		t.Fatalf("GetRSSFeedInfo() ok = false, want true")
+	}
+	if info.ConsecutiveNotModified != 3 {
+		t.Fatalf("ConsecutiveNotModified after 3 echoed polls = %d, want 3 (echoing must still advance the streak)", info.ConsecutiveNotModified)
+	}
+	if info.ConsecutiveNotModifiedSince == nil {
+		t.Fatalf("ConsecutiveNotModifiedSince after echoed polls = nil, want set")
+	}
+
+	// Push the recorded streak start past the trip duration and poll
+	// once more with the same echoed validator: the forced refetch
+	// must still fire, proving the streak was genuinely advancing, not
+	// stuck at 0 the way the pre-fix empty-only guard left it.
+	feedInfo := tracker.rssStatus.Feeds[feedURL]
+	pastDue := statusNow().Add(-(maxConsecutiveNotModifiedDuration + time.Minute))
+	feedInfo.ConsecutiveNotModifiedSince = &pastDue
+	tracker.rssStatus.Feeds[feedURL] = feedInfo
+
+	tracker.UpdateFeedStatusWithErrorInfoAndValidators(feedURL, true, 0, "", SourceErrorInfo{}, echoed)
+	got := tracker.GetRSSFeedHTTPValidators([]string{feedURL})
+	if _, exists := got[feedURL]; exists {
+		t.Fatalf("validators after the duration elapsed with an echoed validator = %+v, want the feed absent (forced refetch)", got[feedURL])
 	}
 }
 
@@ -1681,81 +1701,15 @@ func TestRSSLegacyAliasIsNotAdoptedBySiblingDestination(t *testing.T) {
 	)
 
 	t.Run("sent alias", func(t *testing.T) {
-		tracker := NewMemoryTracker()
-		tracker.MarkRSSItemSentToDestination(itemKey, "Title", "Feed", d1)
-		tracker.MarkRSSItemSentToLegacyDestination(itemKey, "Title", "Feed", url, d1)
-
-		if !tracker.IsRSSItemSentToDestination(itemKey, d1, url) {
-			t.Fatal("owner asking about its own delivery = false, want true")
-		}
-		for _, sibling := range []string{d2, gov} {
-			if tracker.IsRSSItemSentToDestination(itemKey, sibling, url) {
-				t.Fatalf("sibling %q adopted the owner-stamped sent alias", sibling)
-			}
-			if snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, sibling); ok {
-				t.Fatalf("sibling %q recorded a phantom delivery it never made: %+v", sibling, snapshot)
-			}
-		}
+		assertRSSSentAliasOwnership(t, itemKey, url, d1, d2, gov)
 	})
 
 	t.Run("skip alias", func(t *testing.T) {
-		tracker := NewMemoryTracker()
-		tracker.MarkRSSItemSkippedForDestination(itemKey, d1)
-		tracker.MarkRSSItemSkippedForLegacyDestination(itemKey, url, d1)
-
-		if !tracker.IsRSSItemSentToDestination(itemKey, d1, url) {
-			t.Fatal("owner asking about its own skip = false, want true")
-		}
-		snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, d1)
-		if !ok || !snapshot.Skipped {
-			t.Fatalf("owner skip snapshot = %+v ok=%v, want Skipped=true", snapshot, ok)
-		}
-		// The alias row itself (raw, queried by its own key: the URL) must match
-		// MarkRSSItemSkippedForDestination's primary row byte for byte except
-		// DestinationID: no title, no feed title. MarkRSSItemSkippedForLegacyDestination
-		// takes no title arguments for exactly this reason -- a caller that started
-		// passing itemTitle/feedTitle through would persist RSS titles on the alias
-		// row, which the primary skip marker deliberately never does.
-		aliasRow, ok := tracker.RSSSentItemSnapshot(itemKey, url)
-		if !ok {
-			t.Fatal("alias row missing after MarkRSSItemSkippedForLegacyDestination")
-		}
-		if aliasRow.Title != "" || aliasRow.FeedTitle != "" {
-			t.Fatalf("skip alias row = %+v, want Title and FeedTitle empty (skip markers never persist RSS titles)", aliasRow)
-		}
-		if aliasRow.DestinationID != d1 {
-			t.Fatalf("skip alias row DestinationID = %q, want owner %q", aliasRow.DestinationID, d1)
-		}
-		for _, sibling := range []string{d2, gov} {
-			if tracker.IsRSSItemSentToDestination(itemKey, sibling, url) {
-				t.Fatalf("sibling %q adopted the owner-stamped skip alias", sibling)
-			}
-			if snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, sibling); ok {
-				t.Fatalf("sibling %q recorded a phantom skip it never made: %+v", sibling, snapshot)
-			}
-		}
+		assertRSSSkipAliasOwnership(t, itemKey, url, d1, d2, gov)
 	})
 
 	t.Run("derived alias", func(t *testing.T) {
-		tracker := NewMemoryTracker()
-		tracker.MarkRSSItemDedupedForDestination(itemKey, "Title", "Feed", d1)
-		tracker.MarkRSSItemDedupedForLegacyDestination(itemKey, "Title", "Feed", url, d1)
-
-		if !tracker.IsRSSItemSentToDestination(itemKey, d1, url) {
-			t.Fatal("owner asking about its own derived marker = false, want true")
-		}
-		snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, d1)
-		if !ok || !snapshot.Derived {
-			t.Fatalf("owner derived snapshot = %+v ok=%v, want Derived=true", snapshot, ok)
-		}
-		for _, sibling := range []string{d2, gov} {
-			if tracker.IsRSSItemSentToDestination(itemKey, sibling, url) {
-				t.Fatalf("sibling %q adopted the owner-stamped derived alias", sibling)
-			}
-			if snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, sibling); ok {
-				t.Fatalf("sibling %q recorded a phantom derived marker it never made: %+v", sibling, snapshot)
-			}
-		}
+		assertRSSDerivedAliasOwnership(t, itemKey, url, d1, d2, gov)
 	})
 
 	// Row note (plan §3b, the row that matters most): a genuine pre-fix legacy
@@ -1767,18 +1721,104 @@ func TestRSSLegacyAliasIsNotAdoptedBySiblingDestination(t *testing.T) {
 	// migration -- doing so would turn every pre-fix file with a shared URL into
 	// a duplicate-alert source.
 	t.Run("pre-fix unstamped legacy marker stays adoptable by every destination", func(t *testing.T) {
-		tracker := NewMemoryTracker()
-		tracker.MarkRSSItemSentToWebhook(itemKey, "Title", "Feed", url)
-
-		for _, asking := range []string{d1, d2, gov} {
-			if !tracker.IsRSSItemSentToDestination(itemKey, asking, url) {
-				t.Fatalf("destination %q did not adopt the genuine pre-fix legacy marker", asking)
-			}
-		}
-		if alias, ok := tracker.RSSSentItemSnapshot(itemKey, url); !ok || alias.DestinationID != "" {
-			t.Fatalf("legacy alias after migration = %+v ok=%v, want DestinationID empty (never stamped)", alias, ok)
-		}
+		assertRSSUnstampedLegacyAliasAdoptable(t, itemKey, url, d1, d2, gov)
 	})
+}
+
+func assertRSSSentAliasOwnership(t *testing.T, itemKey, url, d1, d2, gov string) {
+	t.Helper()
+	tracker := NewMemoryTracker()
+	tracker.MarkRSSItemSentToDestination(itemKey, "Title", "Feed", d1)
+	tracker.MarkRSSItemSentToLegacyDestination(itemKey, "Title", "Feed", url, d1)
+
+	if !tracker.IsRSSItemSentToDestination(itemKey, d1, url) {
+		t.Fatal("owner asking about its own delivery = false, want true")
+	}
+	for _, sibling := range []string{d2, gov} {
+		if tracker.IsRSSItemSentToDestination(itemKey, sibling, url) {
+			t.Fatalf("sibling %q adopted the owner-stamped sent alias", sibling)
+		}
+		if snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, sibling); ok {
+			t.Fatalf("sibling %q recorded a phantom delivery it never made: %+v", sibling, snapshot)
+		}
+	}
+}
+
+func assertRSSSkipAliasOwnership(t *testing.T, itemKey, url, d1, d2, gov string) {
+	t.Helper()
+	tracker := NewMemoryTracker()
+	tracker.MarkRSSItemSkippedForDestination(itemKey, d1)
+	tracker.MarkRSSItemSkippedForLegacyDestination(itemKey, url, d1)
+
+	if !tracker.IsRSSItemSentToDestination(itemKey, d1, url) {
+		t.Fatal("owner asking about its own skip = false, want true")
+	}
+	snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, d1)
+	if !ok || !snapshot.Skipped {
+		t.Fatalf("owner skip snapshot = %+v ok=%v, want Skipped=true", snapshot, ok)
+	}
+	// The alias row itself (raw, queried by its own key: the URL) must match
+	// MarkRSSItemSkippedForDestination's primary row byte for byte except
+	// DestinationID: no title, no feed title. MarkRSSItemSkippedForLegacyDestination
+	// takes no title arguments for exactly this reason -- a caller that started
+	// passing itemTitle/feedTitle through would persist RSS titles on the alias
+	// row, which the primary skip marker deliberately never does.
+	aliasRow, ok := tracker.RSSSentItemSnapshot(itemKey, url)
+	if !ok {
+		t.Fatal("alias row missing after MarkRSSItemSkippedForLegacyDestination")
+	}
+	if aliasRow.Title != "" || aliasRow.FeedTitle != "" {
+		t.Fatalf("skip alias row = %+v, want Title and FeedTitle empty (skip markers never persist RSS titles)", aliasRow)
+	}
+	if aliasRow.DestinationID != d1 {
+		t.Fatalf("skip alias row DestinationID = %q, want owner %q", aliasRow.DestinationID, d1)
+	}
+	for _, sibling := range []string{d2, gov} {
+		if tracker.IsRSSItemSentToDestination(itemKey, sibling, url) {
+			t.Fatalf("sibling %q adopted the owner-stamped skip alias", sibling)
+		}
+		if snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, sibling); ok {
+			t.Fatalf("sibling %q recorded a phantom skip it never made: %+v", sibling, snapshot)
+		}
+	}
+}
+
+func assertRSSDerivedAliasOwnership(t *testing.T, itemKey, url, d1, d2, gov string) {
+	t.Helper()
+	tracker := NewMemoryTracker()
+	tracker.MarkRSSItemDedupedForDestination(itemKey, "Title", "Feed", d1)
+	tracker.MarkRSSItemDedupedForLegacyDestination(itemKey, "Title", "Feed", url, d1)
+
+	if !tracker.IsRSSItemSentToDestination(itemKey, d1, url) {
+		t.Fatal("owner asking about its own derived marker = false, want true")
+	}
+	snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, d1)
+	if !ok || !snapshot.Derived {
+		t.Fatalf("owner derived snapshot = %+v ok=%v, want Derived=true", snapshot, ok)
+	}
+	for _, sibling := range []string{d2, gov} {
+		if tracker.IsRSSItemSentToDestination(itemKey, sibling, url) {
+			t.Fatalf("sibling %q adopted the owner-stamped derived alias", sibling)
+		}
+		if snapshot, ok := tracker.RSSSentItemSnapshot(itemKey, sibling); ok {
+			t.Fatalf("sibling %q recorded a phantom derived marker it never made: %+v", sibling, snapshot)
+		}
+	}
+}
+
+func assertRSSUnstampedLegacyAliasAdoptable(t *testing.T, itemKey, url, d1, d2, gov string) {
+	t.Helper()
+	tracker := NewMemoryTracker()
+	tracker.MarkRSSItemSentToWebhook(itemKey, "Title", "Feed", url)
+
+	for _, asking := range []string{d1, d2, gov} {
+		if !tracker.IsRSSItemSentToDestination(itemKey, asking, url) {
+			t.Fatalf("destination %q did not adopt the genuine pre-fix legacy marker", asking)
+		}
+	}
+	if alias, ok := tracker.RSSSentItemSnapshot(itemKey, url); !ok || alias.DestinationID != "" {
+		t.Fatalf("legacy alias after migration = %+v ok=%v, want DestinationID empty (never stamped)", alias, ok)
+	}
 }
 
 // TestRSSRenamedDestinationDoesNotAdoptOwnerStampedAlias is the RSS mirror of
@@ -1986,31 +2026,7 @@ func TestRSSBackfillIgnoresOwnerStampedAliasRows(t *testing.T) {
 
 	var counts []int
 	for _, aliasDestinationID := range []string{"", destination} {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, statusRSSFileName), []byte(buildStatus(aliasDestinationID)), 0600); err != nil {
-			t.Fatalf("WriteFile(rss_status.json) error = %v", err)
-		}
-		tracker, err := NewTracker(dir)
-		if err != nil {
-			t.Fatalf("NewTracker() error = %v", err)
-		}
-
-		contentSigRows := 0
-		total := 0
-		for _, sentInfo := range tracker.rssStatus.SentItems {
-			total++
-			if strings.HasPrefix(sentInfo.ItemKey, "content-sig:") {
-				contentSigRows++
-				if sentInfo.DestinationID != destination {
-					t.Fatalf("content-sig row owned by %q, want %q (aliasDestinationID=%q)", sentInfo.DestinationID, destination, aliasDestinationID)
-				}
-			}
-		}
-		if total != 2+contentSigRows {
-			t.Fatalf("total sent rows = %d, want %d (2 originals + %d derived); aliasDestinationID=%q",
-				total, 2+contentSigRows, contentSigRows, aliasDestinationID)
-		}
-		counts = append(counts, contentSigRows)
+		counts = append(counts, assertRSSBackfillContentSignatureRows(t, buildStatus(aliasDestinationID), aliasDestinationID, destination))
 	}
 	if counts[0] == 0 {
 		t.Fatal("backfill derived no content-signature rows; test setup produced nothing to compare")
@@ -2019,6 +2035,35 @@ func TestRSSBackfillIgnoresOwnerStampedAliasRows(t *testing.T) {
 		t.Fatalf("content-sig row counts differ between unstamped and stamped alias: %d vs %d; a stamped alias must not double the backfill",
 			counts[0], counts[1])
 	}
+}
+
+func assertRSSBackfillContentSignatureRows(t *testing.T, statusJSON, aliasDestinationID, destination string) int {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, statusRSSFileName), []byte(statusJSON), 0600); err != nil {
+		t.Fatalf("WriteFile(rss_status.json) error = %v", err)
+	}
+	tracker, err := NewTracker(dir)
+	if err != nil {
+		t.Fatalf("NewTracker() error = %v", err)
+	}
+
+	contentSigRows := 0
+	total := 0
+	for _, sentInfo := range tracker.rssStatus.SentItems {
+		total++
+		if strings.HasPrefix(sentInfo.ItemKey, "content-sig:") {
+			contentSigRows++
+			if sentInfo.DestinationID != destination {
+				t.Fatalf("content-sig row owned by %q, want %q (aliasDestinationID=%q)", sentInfo.DestinationID, destination, aliasDestinationID)
+			}
+		}
+	}
+	if total != 2+contentSigRows {
+		t.Fatalf("total sent rows = %d, want %d (2 originals + %d derived); aliasDestinationID=%q",
+			total, 2+contentSigRows, contentSigRows, aliasDestinationID)
+	}
+	return contentSigRows
 }
 
 // TestRSSRetentionIgnoresLegacyAliasOwnership pins plan §4.5/§7 risk-adjacent
