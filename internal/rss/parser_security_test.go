@@ -204,26 +204,31 @@ func TestParseFeedNeverDereferencesSystemIdentifiers(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			entries, err := serveLocalFeedBytes(t, []byte(tc.body))
-			if err != nil {
-				t.Fatalf("ParseFeed() error = %v", err)
-			}
-			if len(entries) != 1 {
-				t.Fatalf("entries = %d, want 1", len(entries))
-			}
-			if entries[0].Title != "plain" {
-				t.Fatalf("entry title = %q, want %q", entries[0].Title, "plain")
-			}
-			for _, field := range []string{entries[0].Title, entries[0].Description, entries[0].Link, entries[0].FeedTitle} {
-				if strings.Contains(field, sentinel) || strings.Contains(field, "LEAKED-VIA-EXTERNAL-DTD") {
-					t.Fatalf("external content leaked into entry field %q", field)
-				}
-			}
+			assertSystemIdentifierNotDereferenced(t, tc.body, sentinel)
 		})
 	}
 
 	if got := atomic.LoadInt64(&externalHits); got != 0 {
 		t.Fatalf("external SYSTEM identifier was fetched %d times, want 0", got)
+	}
+}
+
+func assertSystemIdentifierNotDereferenced(t *testing.T, body, sentinel string) {
+	t.Helper()
+	entries, err := serveLocalFeedBytes(t, []byte(body))
+	if err != nil {
+		t.Fatalf("ParseFeed() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].Title != "plain" {
+		t.Fatalf("entry title = %q, want %q", entries[0].Title, "plain")
+	}
+	for _, field := range []string{entries[0].Title, entries[0].Description, entries[0].Link, entries[0].FeedTitle} {
+		if strings.Contains(field, sentinel) || strings.Contains(field, "LEAKED-VIA-EXTERNAL-DTD") {
+			t.Fatalf("external content leaked into entry field %q", field)
+		}
 	}
 }
 

@@ -98,28 +98,33 @@ func TestNormalizeFeedReaderMatchesOldBehaviorForMalformedUTF16(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			// Ground truth: the same x/text primitive the removed
-			// decodeBOMUnicode called directly. Per TESTING.md this never
-			// errors once a BOM has matched; it substitutes U+FFFD.
-			want, err := unicode.UTF16(unicode.LittleEndian, unicode.ExpectBOM).NewDecoder().Bytes(tc.body)
-			if err != nil {
-				t.Fatalf("reference decode error = %v, want nil (structurally unreachable)", err)
-			}
-
-			reader, transcoded, err := normalizeFeedReader(tc.body)
-			if err != nil {
-				t.Fatalf("normalizeFeedReader() error = %v, want nil", err)
-			}
-			if !transcoded {
-				t.Fatal("transcoded = false, want true")
-			}
-			got, err := io.ReadAll(reader)
-			if err != nil {
-				t.Fatalf("reading streamed decode error = %v, want nil", err)
-			}
-			if !bytes.Equal(got, want) {
-				t.Fatalf("streamed decode = %q, want %q (byte-identical to the old buffered decode)", got, want)
-			}
+			assertMalformedUTF16StreamMatchesReference(t, tc.body)
 		})
+	}
+}
+
+func assertMalformedUTF16StreamMatchesReference(t *testing.T, body []byte) {
+	t.Helper()
+	// Ground truth: the same x/text primitive the removed decodeBOMUnicode
+	// called directly. Per TESTING.md this never errors once a BOM has matched;
+	// it substitutes U+FFFD.
+	want, err := unicode.UTF16(unicode.LittleEndian, unicode.ExpectBOM).NewDecoder().Bytes(body)
+	if err != nil {
+		t.Fatalf("reference decode error = %v, want nil (structurally unreachable)", err)
+	}
+
+	reader, transcoded, err := normalizeFeedReader(body)
+	if err != nil {
+		t.Fatalf("normalizeFeedReader() error = %v, want nil", err)
+	}
+	if !transcoded {
+		t.Fatal("transcoded = false, want true")
+	}
+	got, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("reading streamed decode error = %v, want nil", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("streamed decode = %q, want %q (byte-identical to the old buffered decode)", got, want)
 	}
 }

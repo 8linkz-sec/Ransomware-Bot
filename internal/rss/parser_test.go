@@ -314,22 +314,27 @@ func TestGenerateEntryKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := GenerateEntryKey(feedURL, tt.guid, tt.link, tt.title)
-			if tt.wantPrefix == "" {
-				if result != "" {
-					t.Errorf("GenerateEntryKey() = %q, want empty key", result)
-				}
-				return
-			}
-			if !strings.HasPrefix(result, tt.wantPrefix) {
-				t.Errorf("GenerateEntryKey() = %q, want prefix %q", result, tt.wantPrefix)
-			}
-			for _, forbidden := range []string{tt.guid, "example.com/article", "hello world"} {
-				if forbidden != "" && strings.Contains(result, forbidden) {
-					t.Errorf("GenerateEntryKey() leaked source identity %q in opaque key: %q", forbidden, result)
-				}
-			}
+			assertGeneratedEntryKey(t, feedURL, tt.guid, tt.link, tt.title, tt.wantPrefix)
 		})
+	}
+}
+
+func assertGeneratedEntryKey(t *testing.T, feedURL, guid, link, title, wantPrefix string) {
+	t.Helper()
+	result := GenerateEntryKey(feedURL, guid, link, title)
+	if wantPrefix == "" {
+		if result != "" {
+			t.Errorf("GenerateEntryKey() = %q, want empty key", result)
+		}
+		return
+	}
+	if !strings.HasPrefix(result, wantPrefix) {
+		t.Errorf("GenerateEntryKey() = %q, want prefix %q", result, wantPrefix)
+	}
+	for _, forbidden := range []string{guid, "example.com/article", "hello world"} {
+		if forbidden != "" && strings.Contains(result, forbidden) {
+			t.Errorf("GenerateEntryKey() leaked source identity %q in opaque key: %q", forbidden, result)
+		}
 	}
 }
 
@@ -1459,25 +1464,30 @@ func TestParseFeedDecodesDeclaredCharsets(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			body, err := tc.encode([]byte(encodedRSSFixture(tc.declared, tc.title)))
-			if err != nil {
-				t.Fatalf("encode fixture: %v", err)
-			}
-
-			entries, err := serveLocalFeedBytes(t, body)
-			if err != nil {
-				t.Fatalf("ParseFeed() error = %v", err)
-			}
-			if len(entries) != 1 {
-				t.Fatalf("entries = %d, want 1", len(entries))
-			}
-			if entries[0].Title != tc.title {
-				t.Fatalf("entry title = %q, want %q", entries[0].Title, tc.title)
-			}
-			if entries[0].Description != tc.title {
-				t.Fatalf("entry description = %q, want %q", entries[0].Description, tc.title)
-			}
+			assertDeclaredCharsetDecodes(t, tc.declared, tc.title, tc.encode)
 		})
+	}
+}
+
+func assertDeclaredCharsetDecodes(t *testing.T, declared, title string, encode func([]byte) ([]byte, error)) {
+	t.Helper()
+	body, err := encode([]byte(encodedRSSFixture(declared, title)))
+	if err != nil {
+		t.Fatalf("encode fixture: %v", err)
+	}
+
+	entries, err := serveLocalFeedBytes(t, body)
+	if err != nil {
+		t.Fatalf("ParseFeed() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if entries[0].Title != title {
+		t.Fatalf("entry title = %q, want %q", entries[0].Title, title)
+	}
+	if entries[0].Description != title {
+		t.Fatalf("entry description = %q, want %q", entries[0].Description, title)
 	}
 }
 
@@ -1561,31 +1571,31 @@ func TestUnknownCharsetLabelLogsAreTruncated(t *testing.T) {
 		t.Fatalf("transport calls = %d, want 2 (one retryable failure, one real attempt)", calls)
 	}
 
-	const maxLoggedErrorRunes = 240
-	assertLoggedErrorFieldBounded := func(message string) {
-		t.Helper()
-		for _, entry := range hook.AllEntries() {
-			if entry.Message != message {
-				continue
-			}
-			raw, ok := entry.Data["error"]
-			if !ok {
-				t.Fatalf("log entry %q has no \"error\" field", message)
-			}
-			text, ok := raw.(string)
-			if !ok {
-				t.Fatalf("log entry %q \"error\" field = %#v, want string", message, raw)
-			}
-			if got := utf8.RuneCountInString(text); got > maxLoggedErrorRunes {
-				t.Fatalf("log entry %q \"error\" field = %d runes, want <= %d", message, got, maxLoggedErrorRunes)
-			}
-			return
-		}
-		t.Fatalf("no log entry found with message %q", message)
-	}
+	assertLoggedErrorFieldBounded(t, hook, "RSS feed parsing failed, retrying...")
+	assertLoggedErrorFieldBounded(t, hook, "RSS feed parsing failed with terminal error, not retrying")
+}
 
-	assertLoggedErrorFieldBounded("RSS feed parsing failed, retrying...")
-	assertLoggedErrorFieldBounded("RSS feed parsing failed with terminal error, not retrying")
+func assertLoggedErrorFieldBounded(t *testing.T, hook *logtest.Hook, message string) {
+	t.Helper()
+	const maxLoggedErrorRunes = 240
+	for _, entry := range hook.AllEntries() {
+		if entry.Message != message {
+			continue
+		}
+		raw, ok := entry.Data["error"]
+		if !ok {
+			t.Fatalf("log entry %q has no \"error\" field", message)
+		}
+		text, ok := raw.(string)
+		if !ok {
+			t.Fatalf("log entry %q \"error\" field = %#v, want string", message, raw)
+		}
+		if got := utf8.RuneCountInString(text); got > maxLoggedErrorRunes {
+			t.Fatalf("log entry %q \"error\" field = %d runes, want <= %d", message, got, maxLoggedErrorRunes)
+		}
+		return
+	}
+	t.Fatalf("no log entry found with message %q", message)
 }
 
 // TestRSSRetryLogRedactsFeedURLErrorViaAnchor pins a fix: the retry-log
@@ -1695,25 +1705,30 @@ func TestParseFeedRejectsUTF32ByteOrderMark(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			body := append(append([]byte{}, tc.bom...), []byte(encodedRSSFixture("UTF-32", "utf-32 body"))...)
-
-			entries, err := serveLocalFeedBytes(t, body)
-			if err == nil {
-				t.Fatalf("ParseFeed() succeeded with UTF-32 BOM, entries = %d", len(entries))
-			}
-			if len(entries) != 0 {
-				t.Fatalf("entries = %d, want 0", len(entries))
-			}
-			if !strings.Contains(err.Error(), `unsupported feed encoding "utf-32"`) {
-				t.Fatalf("ParseFeed() error = %v, want unsupported feed encoding \"utf-32\"", err)
-			}
-			if shouldRetryRSSParseError(err) {
-				t.Fatalf("shouldRetryRSSParseError(%v) = true, want false", err)
-			}
-			if got := OperatorErrorMessage(err); got != "RSS feed declares an encoding the bot cannot decode" {
-				t.Fatalf("OperatorErrorMessage() = %q, want encoding message", got)
-			}
+			assertUTF32BOMRejected(t, tc.bom)
 		})
+	}
+}
+
+func assertUTF32BOMRejected(t *testing.T, bom []byte) {
+	t.Helper()
+	body := append(append([]byte{}, bom...), []byte(encodedRSSFixture("UTF-32", "utf-32 body"))...)
+
+	entries, err := serveLocalFeedBytes(t, body)
+	if err == nil {
+		t.Fatalf("ParseFeed() succeeded with UTF-32 BOM, entries = %d", len(entries))
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries = %d, want 0", len(entries))
+	}
+	if !strings.Contains(err.Error(), `unsupported feed encoding "utf-32"`) {
+		t.Fatalf("ParseFeed() error = %v, want unsupported feed encoding \"utf-32\"", err)
+	}
+	if shouldRetryRSSParseError(err) {
+		t.Fatalf("shouldRetryRSSParseError(%v) = true, want false", err)
+	}
+	if got := OperatorErrorMessage(err); got != "RSS feed declares an encoding the bot cannot decode" {
+		t.Fatalf("OperatorErrorMessage() = %q, want encoding message", got)
 	}
 }
 
@@ -1836,38 +1851,14 @@ func TestParseFeedWarnsOnceForUnparseableTimestamp(t *testing.T) {
 
 	firstURL := first.URL + "/feed.xml"
 	for poll := 0; poll < 2; poll++ {
-		entries, err := parser.ParseFeed(context.Background(), firstURL)
-		if err != nil {
-			t.Fatalf("ParseFeed(poll %d) error = %v", poll, err)
-		}
-		if len(entries) != 3 {
-			t.Fatalf("entries on poll %d = %d, want 3 (undated items must not be dropped)", poll, len(entries))
-		}
-		for _, entry := range entries {
-			if !entry.Published.IsZero() {
-				t.Fatalf("entry %q Published = %s, want zero for an unparseable timestamp", entry.Title, entry.Published)
-			}
-		}
+		assertBrokenTimestampItemsDelivered(t, parser, firstURL, poll)
 	}
 
 	warnings := timestampWarningsForTest(hook)
 	if len(warnings) != 1 {
 		t.Fatalf("timestamp warnings after two polls of one feed = %d, want 1", len(warnings))
 	}
-	feedURLField, ok := warnings[0].Data["feed_url"].(string)
-	if !ok {
-		t.Fatalf("feed_url field missing or non-string: %#v", warnings[0].Data["feed_url"])
-	}
-	if feedURLField != firstURL {
-		t.Fatalf("feed_url field = %q, want %q", feedURLField, firstURL)
-	}
-	rawValue, ok := warnings[0].Data["timestamp"].(string)
-	if !ok {
-		t.Fatalf("timestamp field missing or non-string: %#v", warnings[0].Data["timestamp"])
-	}
-	if rawValue != "2026-01-15T10:00:00+bogus" {
-		t.Fatalf("timestamp field = %q, want the raw feed value", rawValue)
-	}
+	assertBrokenTimestampWarningFields(t, warnings[0], firstURL)
 
 	if _, err := parser.ParseFeed(context.Background(), second.URL+"/feed.xml"); err != nil {
 		t.Fatalf("ParseFeed(second feed) error = %v", err)
@@ -1901,6 +1892,40 @@ func TestParseFeedWarnsOnceForUnparseableTimestamp(t *testing.T) {
 	}
 	if got := len(timestampWarningsForTest(hook)); got != 2 {
 		t.Fatalf("timestamp warnings after a feed with no timestamps at all = %d, want 2 (nothing failed to parse)", got)
+	}
+}
+
+func assertBrokenTimestampItemsDelivered(t *testing.T, parser *Parser, feedURL string, poll int) {
+	t.Helper()
+	entries, err := parser.ParseFeed(context.Background(), feedURL)
+	if err != nil {
+		t.Fatalf("ParseFeed(poll %d) error = %v", poll, err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("entries on poll %d = %d, want 3 (undated items must not be dropped)", poll, len(entries))
+	}
+	for _, entry := range entries {
+		if !entry.Published.IsZero() {
+			t.Fatalf("entry %q Published = %s, want zero for an unparseable timestamp", entry.Title, entry.Published)
+		}
+	}
+}
+
+func assertBrokenTimestampWarningFields(t *testing.T, warning *logrus.Entry, firstURL string) {
+	t.Helper()
+	feedURLField, ok := warning.Data["feed_url"].(string)
+	if !ok {
+		t.Fatalf("feed_url field missing or non-string: %#v", warning.Data["feed_url"])
+	}
+	if feedURLField != firstURL {
+		t.Fatalf("feed_url field = %q, want %q", feedURLField, firstURL)
+	}
+	rawValue, ok := warning.Data["timestamp"].(string)
+	if !ok {
+		t.Fatalf("timestamp field missing or non-string: %#v", warning.Data["timestamp"])
+	}
+	if rawValue != "2026-01-15T10:00:00+bogus" {
+		t.Fatalf("timestamp field = %q, want the raw feed value", rawValue)
 	}
 }
 
