@@ -85,23 +85,27 @@ func TestStatusRetentionPolicyForConfigMapsAuditLogRotation(t *testing.T) {
 			}
 
 			got := statusRetentionPolicyForConfig(cfg)
-
-			if got.AuditLogMaxSizeMB != 5 {
-				t.Fatalf("AuditLogMaxSizeMB = %d, want 5", got.AuditLogMaxSizeMB)
-			}
-			if got.AuditLogMaxBackups != 3 {
-				t.Fatalf("AuditLogMaxBackups = %d, want 3", got.AuditLogMaxBackups)
-			}
-			if got.AuditLogMaxAgeDays != 7 {
-				t.Fatalf("AuditLogMaxAgeDays = %d, want 7", got.AuditLogMaxAgeDays)
-			}
-			if got.AuditLogCompress == nil {
-				t.Fatal("AuditLogCompress = nil, want a non-nil *bool")
-			}
-			if *got.AuditLogCompress != tt.compress {
-				t.Fatalf("*AuditLogCompress = %v, want %v", *got.AuditLogCompress, tt.compress)
-			}
+			assertAuditLogRetentionMapping(t, got, tt.compress)
 		})
+	}
+}
+
+func assertAuditLogRetentionMapping(t *testing.T, got status.RetentionPolicy, compress bool) {
+	t.Helper()
+	if got.AuditLogMaxSizeMB != 5 {
+		t.Fatalf("AuditLogMaxSizeMB = %d, want 5", got.AuditLogMaxSizeMB)
+	}
+	if got.AuditLogMaxBackups != 3 {
+		t.Fatalf("AuditLogMaxBackups = %d, want 3", got.AuditLogMaxBackups)
+	}
+	if got.AuditLogMaxAgeDays != 7 {
+		t.Fatalf("AuditLogMaxAgeDays = %d, want 7", got.AuditLogMaxAgeDays)
+	}
+	if got.AuditLogCompress == nil {
+		t.Fatal("AuditLogCompress = nil, want a non-nil *bool")
+	}
+	if *got.AuditLogCompress != compress {
+		t.Fatalf("*AuditLogCompress = %v, want %v", *got.AuditLogCompress, compress)
 	}
 }
 
@@ -155,15 +159,17 @@ func TestIsAPIAuthErrorNonHTTPStatusError(t *testing.T) {
 	}
 }
 
+type apiSourceErrorCase struct {
+	name          string
+	err           error
+	wantCategory  string
+	wantStatus    int
+	wantRetryable *bool
+	wantTimeout   *bool
+}
+
 func TestAPISourceErrorInfoClassifications(t *testing.T) {
-	tests := []struct {
-		name          string
-		err           error
-		wantCategory  string
-		wantStatus    int
-		wantRetryable *bool
-		wantTimeout   *bool
-	}{
+	tests := []apiSourceErrorCase{
 		{name: "nil error", err: nil, wantCategory: "", wantRetryable: boolPtr(true), wantTimeout: boolPtr(false)},
 		{name: "canceled", err: context.Canceled, wantCategory: "canceled", wantRetryable: boolPtr(false)},
 		{name: "deadline", err: context.DeadlineExceeded, wantCategory: "timeout", wantTimeout: boolPtr(true)},
@@ -194,23 +200,28 @@ func TestAPISourceErrorInfoClassifications(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			info := apiSourceErrorInfo(tt.err)
-			if info.ErrorCategory != tt.wantCategory {
-				t.Fatalf("ErrorCategory = %q, want %q", info.ErrorCategory, tt.wantCategory)
-			}
-			if info.StatusCode != tt.wantStatus {
-				t.Fatalf("StatusCode = %d, want %d", info.StatusCode, tt.wantStatus)
-			}
-			if tt.wantRetryable != nil {
-				if info.Retryable == nil || *info.Retryable != *tt.wantRetryable {
-					t.Fatalf("Retryable = %v, want %v", info.Retryable, *tt.wantRetryable)
-				}
-			}
-			if tt.wantTimeout != nil {
-				if info.Timeout == nil || *info.Timeout != *tt.wantTimeout {
-					t.Fatalf("Timeout = %v, want %v", info.Timeout, *tt.wantTimeout)
-				}
-			}
+			assertAPISourceErrorInfo(t, info, tt)
 		})
+	}
+}
+
+func assertAPISourceErrorInfo(t *testing.T, info status.SourceErrorInfo, tt apiSourceErrorCase) {
+	t.Helper()
+	if info.ErrorCategory != tt.wantCategory {
+		t.Fatalf("ErrorCategory = %q, want %q", info.ErrorCategory, tt.wantCategory)
+	}
+	if info.StatusCode != tt.wantStatus {
+		t.Fatalf("StatusCode = %d, want %d", info.StatusCode, tt.wantStatus)
+	}
+	if tt.wantRetryable != nil {
+		if info.Retryable == nil || *info.Retryable != *tt.wantRetryable {
+			t.Fatalf("Retryable = %v, want %v", info.Retryable, *tt.wantRetryable)
+		}
+	}
+	if tt.wantTimeout != nil {
+		if info.Timeout == nil || *info.Timeout != *tt.wantTimeout {
+			t.Fatalf("Timeout = %v, want %v", info.Timeout, *tt.wantTimeout)
+		}
 	}
 }
 
