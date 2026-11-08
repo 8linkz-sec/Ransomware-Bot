@@ -21,6 +21,9 @@ type feedResult struct {
 	entries  []Entry
 	metadata FeedFetchMetadata
 	err      error
+	// completedAt is compared with the caller's cycle deadline after the result
+	// leaves the worker. A canceled worker may still win its result-channel send.
+	completedAt time.Time
 }
 
 // workerPool manages concurrent RSS feed processing.
@@ -79,6 +82,7 @@ func (wp *workerPool) worker(ctx context.Context) {
 
 func (wp *workerPool) parseFeedJob(ctx context.Context, feedURL string) (result feedResult) {
 	result.url = feedURL
+	defer func() { result.completedAt = time.Now() }()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result.entries = nil
@@ -170,6 +174,7 @@ func (wp *workerPool) collectFeedResults(
 	feedURLs []string,
 ) (*FeedResults, error) {
 	fr := newFeedResults()
+	deadline, _ := ctx.Deadline()
 
 	batchTimer := time.NewTimer(wp.parser.workerTimeout)
 	defer batchTimer.Stop()
@@ -183,11 +188,17 @@ func (wp *workerPool) collectFeedResults(
 				}
 				return handleResultsChannelClosed(fr, feedURLs, i)
 			}
+			if !feedResultWithinDeadline(result, deadline) {
+				// The result itself missed the caller's budget. Keep any other
+				// buffered feeds that completed in time, then report a partial pass.
+				wp.drainBufferedResultsUntil(fr, deadline)
+				return resultsOnContextError(fr, context.DeadlineExceeded)
+			}
 			applyFeedResult(fr, result)
 		case <-ctx.Done():
 			err := ctx.Err()
 			if errors.Is(err, context.DeadlineExceeded) {
-				wp.drainBufferedResults(fr)
+				wp.drainBufferedResultsUntil(fr, deadline)
 			}
 			return resultsOnContextError(fr, err)
 		case <-batchTimer.C:
@@ -245,6 +256,10 @@ func applyFeedResult(fr *FeedResults, result feedResult) {
 	}
 }
 
+func feedResultWithinDeadline(result feedResult, deadline time.Time) bool {
+	return deadline.IsZero() || !result.completedAt.After(deadline)
+}
+
 func handleResultsChannelClosed(fr *FeedResults, feedURLs []string, collected int) (*FeedResults, error) {
 	log.WithField("collected", collected).Warn("Results channel closed before collecting all results")
 	markMissingFeedErrors(fr, feedURLs, "results channel closed before feed completed")
@@ -279,10 +294,15 @@ func (wp *workerPool) handleWorkerPoolTimeout(
 	)
 }
 
-// drainBufferedResults consumes results that workers already delivered before the
-// batch deadline without blocking, so they are honoured instead of being reported
-// as timeouts. It returns the number of results applied.
+// drainBufferedResults consumes currently buffered results without blocking,
+// so the batch-timer path honours them instead of reporting them as timeouts.
+// The caller-deadline path uses drainBufferedResultsUntil to exclude feeds
+// that completed after its deadline. Both return the number of results applied.
 func (wp *workerPool) drainBufferedResults(fr *FeedResults) int {
+	return wp.drainBufferedResultsUntil(fr, time.Time{})
+}
+
+func (wp *workerPool) drainBufferedResultsUntil(fr *FeedResults, deadline time.Time) int {
 	drained := 0
 	for {
 		select {
@@ -290,8 +310,10 @@ func (wp *workerPool) drainBufferedResults(fr *FeedResults) int {
 			if !ok {
 				return drained
 			}
-			applyFeedResult(fr, result)
-			drained++
+			if feedResultWithinDeadline(result, deadline) {
+				applyFeedResult(fr, result)
+				drained++
+			}
 		default:
 			return drained
 		}

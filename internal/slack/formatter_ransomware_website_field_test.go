@@ -160,6 +160,9 @@ func TestFormatRansomwareMessageWebsiteFallbackRespectsFieldOrderPrecedence(t *t
 		if count != 1 {
 			t.Fatalf("website-carrying block count = %d, want exactly 1: %#v", count, msg.Blocks)
 		}
+		if idx := firstBlockContaining(msg.Blocks, "Website:"); idx != 2 {
+			t.Fatalf("Website block index = %d, want 2 (slack-specific position)", idx)
+		}
 	})
 
 	t.Run("generic order carries website via url alias, slack order unset", func(t *testing.T) {
@@ -180,19 +183,8 @@ func TestFormatRansomwareMessageWebsiteFallbackRespectsFieldOrderPrecedence(t *t
 		}
 	})
 
-	// Accepted residual, pinned deliberately: the generic order positions
-	// website explicitly, but the operator's own slack.field_order overrides
-	// it for Slack and omits website entirely. Slack's guarantee still fires
-	// -- it must, or an operator whose slack.field_order omits website would
-	// see it nowhere on Slack -- and it hoists the field to the front.
-	// Interpolating the position instead (splice the field into the resolved
-	// Slack order after the last field that precedes website in the generic
-	// order and is also present in the resolved order, front when there is
-	// none) is well-defined for every input and does close the difference;
-	// it is not done here because where a field appears is the operator's
-	// decision, while the guarantee that it appears at all is what this
-	// fallback owes. Changing the placement starts with that decision, not
-	// with this test.
+	// A generic Website position is retained relative to fields shared with
+	// Slack's effective order, even when Slack omits Website explicitly.
 	t.Run("generic order carries website, slack-specific order omits it", func(t *testing.T) {
 		formatCfg := &notifyfmt.FormatOptions{
 			FieldOrder: []string{"group", "victim", "website"},
@@ -212,8 +204,82 @@ func TestFormatRansomwareMessageWebsiteFallbackRespectsFieldOrderPrecedence(t *t
 		if count != 1 {
 			t.Fatalf("website-carrying block count = %d, want exactly 1: %#v", count, msg.Blocks)
 		}
+		if idx := firstBlockContaining(msg.Blocks, "Website:"); idx != 2 {
+			t.Fatalf("Website block index = %d, want 2 (after the shared group and victim fields)", idx)
+		}
+	})
+
+	t.Run("website follows the last shared predecessor before a full-width field", func(t *testing.T) {
+		withPostURL := entry
+		withPostURL.ClaimURL = "https://example.test/claim"
+		formatCfg := &notifyfmt.FormatOptions{
+			FieldOrder: []string{"group", "url", "post_url"},
+			Slack: notifyfmt.SlackFormatOptions{
+				FieldOrder: []string{"group", "post_url"},
+			},
+		}
+		msg := formatRansomwareMessage(withPostURL, formatCfg)
+		if idx := firstBlockContaining(msg.Blocks, "Website:"); idx != 2 {
+			t.Fatalf("Website block index = %d, want 2 (after group, before Ransom URL)", idx)
+		}
+		if idx := firstBlockContaining(msg.Blocks, "Ransom URL:"); idx != 3 {
+			t.Fatalf("Ransom URL block index = %d, want 3 (after Website)", idx)
+		}
+		if got := formatCfg.Slack.FieldOrder; len(got) != 2 || got[0] != "group" || got[1] != "post_url" {
+			t.Fatalf("slack.field_order mutated: %#v", got)
+		}
+		if got := formatCfg.FieldOrder; len(got) != 3 || got[0] != "group" || got[1] != "url" || got[2] != "post_url" {
+			t.Fatalf("field_order mutated: %#v", got)
+		}
+	})
+
+	t.Run("full-width shared predecessor anchors website after its block", func(t *testing.T) {
+		withPostURL := entry
+		withPostURL.ClaimURL = "https://example.test/claim"
+		formatCfg := &notifyfmt.FormatOptions{
+			FieldOrder: []string{"group", "post_url", "website"},
+			Slack: notifyfmt.SlackFormatOptions{
+				FieldOrder: []string{"group", "post_url"},
+			},
+		}
+		msg := formatRansomwareMessage(withPostURL, formatCfg)
+		if idx := firstBlockContaining(msg.Blocks, "Ransom URL:"); idx != 2 {
+			t.Fatalf("Ransom URL block index = %d, want 2", idx)
+		}
+		if idx := firstBlockContaining(msg.Blocks, "Website:"); idx != 3 {
+			t.Fatalf("Website block index = %d, want 3 (after Ransom URL)", idx)
+		}
+	})
+
+	t.Run("missing predecessor uses the earlier shared field", func(t *testing.T) {
+		withCountry := entry
+		withCountry.Country = "DE"
+		withCountry.ClaimURL = "https://example.test/claim"
+		formatCfg := &notifyfmt.FormatOptions{
+			FieldOrder: []string{"group", "country", "victim", "website", "post_url"},
+			Slack: notifyfmt.SlackFormatOptions{
+				FieldOrder: []string{"group", "country", "post_url"},
+			},
+		}
+		msg := formatRansomwareMessage(withCountry, formatCfg)
+		if idx := firstBlockContaining(msg.Blocks, "Website:"); idx != 2 {
+			t.Fatalf("Website block index = %d, want 2 (after Country)", idx)
+		}
+		if idx := firstBlockContaining(msg.Blocks, "Ransom URL:"); idx != 3 {
+			t.Fatalf("Ransom URL block index = %d, want 3", idx)
+		}
+	})
+
+	t.Run("no shared predecessor keeps website at the front", func(t *testing.T) {
+		formatCfg := &notifyfmt.FormatOptions{
+			FieldOrder: []string{"country", "website", "group"},
+			Slack: notifyfmt.SlackFormatOptions{
+				FieldOrder: []string{"group"},
+			},
+		}
+		msg := formatRansomwareMessage(entry, formatCfg)
 		if idx := firstBlockContaining(msg.Blocks, "Website:"); idx != 1 {
-			t.Fatalf("Website block index = %d, want 1 (guarantee hoists to the front when the operator's own slack.field_order omits it, even though the generic field_order carries it)", idx)
+			t.Fatalf("Website block index = %d, want 1 (no shared predecessor)", idx)
 		}
 	})
 }
