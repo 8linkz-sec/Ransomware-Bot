@@ -153,54 +153,63 @@ func TestWriteAtomicJSONFileDirSyncFailureWarnsOnceAndSucceeds(t *testing.T) {
 
 	for name, syncErr := range degradations {
 		t.Run(name, func(t *testing.T) {
-			restoreDurabilitySeams(t)
-			hook := logtest.NewGlobal()
-			defer hook.Reset()
-
-			dir := t.TempDir()
-			target := filepath.Join(dir, "status.json")
-			syncDirFunc = func(string) error { return syncErr }
-
-			for round := 0; round < 3; round++ {
-				payload := map[string]int{"round": round}
-				if err := writeAtomicJSONFile(target, "sample", payload); err != nil {
-					t.Fatalf("writeAtomicJSONFile() round %d error = %v, want the save to succeed", round, err)
-				}
-			}
-
-			content, readErr := os.ReadFile(target)
-			if readErr != nil {
-				t.Fatalf("ReadFile() error = %v", readErr)
-			}
-			var decoded map[string]int
-			if err := json.Unmarshal(content, &decoded); err != nil {
-				t.Fatalf("Unmarshal(%q) error = %v", content, err)
-			}
-			if decoded["round"] != 2 {
-				t.Fatalf("target content = %v, want the last write (round 2)", decoded)
-			}
-
-			warnings := 0
-			for _, entry := range hook.AllEntries() {
-				if entry.Level != log.WarnLevel || !strings.Contains(entry.Message, "Status directory fsync failed") {
-					continue
-				}
-				warnings++
-				if got := entry.Data["directory"]; got != dir {
-					t.Fatalf("warning directory = %v, want %s", got, dir)
-				}
-				if got := entry.Data["label"]; got != "sample" {
-					t.Fatalf("warning label = %v, want sample", got)
-				}
-				loggedErr, ok := entry.Data["error"].(error)
-				if !ok || !errors.Is(loggedErr, syncErr) {
-					t.Fatalf("warning error = %v, want %v", entry.Data["error"], syncErr)
-				}
-			}
-			if warnings != 1 {
-				t.Fatalf("directory fsync warnings = %d, want exactly 1", warnings)
-			}
+			assertDirSyncFailureWarnsOnceAndSucceeds(t, syncErr)
 		})
+	}
+}
+
+func assertDirSyncFailureWarnsOnceAndSucceeds(t *testing.T, syncErr error) {
+	t.Helper()
+	restoreDurabilitySeams(t)
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "status.json")
+	syncDirFunc = func(string) error { return syncErr }
+
+	for round := 0; round < 3; round++ {
+		payload := map[string]int{"round": round}
+		if err := writeAtomicJSONFile(target, "sample", payload); err != nil {
+			t.Fatalf("writeAtomicJSONFile() round %d error = %v, want the save to succeed", round, err)
+		}
+	}
+
+	content, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	var decoded map[string]int
+	if err := json.Unmarshal(content, &decoded); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", content, err)
+	}
+	if decoded["round"] != 2 {
+		t.Fatalf("target content = %v, want the last write (round 2)", decoded)
+	}
+	assertDirSyncFailureWarning(t, hook.AllEntries(), dir, syncErr)
+}
+
+func assertDirSyncFailureWarning(t *testing.T, entries []*log.Entry, dir string, syncErr error) {
+	t.Helper()
+	warnings := 0
+	for _, entry := range entries {
+		if entry.Level != log.WarnLevel || !strings.Contains(entry.Message, "Status directory fsync failed") {
+			continue
+		}
+		warnings++
+		if got := entry.Data["directory"]; got != dir {
+			t.Fatalf("warning directory = %v, want %s", got, dir)
+		}
+		if got := entry.Data["label"]; got != "sample" {
+			t.Fatalf("warning label = %v, want sample", got)
+		}
+		loggedErr, ok := entry.Data["error"].(error)
+		if !ok || !errors.Is(loggedErr, syncErr) {
+			t.Fatalf("warning error = %v, want %v", entry.Data["error"], syncErr)
+		}
+	}
+	if warnings != 1 {
+		t.Fatalf("directory fsync warnings = %d, want exactly 1", warnings)
 	}
 }
 
