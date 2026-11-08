@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -181,10 +182,16 @@ func (s *Scheduler) sendRSSEntryToTarget(
 
 	progressFields := webhookProgressFields(deliveryContext.index, deliveryContext.total, destinationID)
 	log.WithFields(progressFields).Info(rssDeliveryProgressMessage(mode))
+	sendStarted := false
 	err := s.sendWithWebhookLock(ctx, messenger, target.url, func() error {
+		sendStarted = true
 		return delivery.sender.SendRSSEntry(ctx, target.url, item.entry, feedType, config.NotificationFormatOptions(&cfg.Format))
 	})
 	if err != nil {
+		if !sendStarted && errors.Is(err, context.Canceled) {
+			log.WithField("messenger", messenger).Warn(rssDeliveryCancelMessage(mode))
+			return rssDeliveryOutcomeCanceled
+		}
 		log.WithFields(webhookFailureFields(messenger, err, log.Fields{
 			"item_key":       item.key,
 			"destination_id": destinationID,

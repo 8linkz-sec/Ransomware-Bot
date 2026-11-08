@@ -631,9 +631,15 @@ func (s *Scheduler) sendAPIEntryToTarget(ctx context.Context, cfg *config.Config
 		}).Error("Missing API webhook sender")
 		return false
 	}
+	sendStarted := false
 	if err := s.sendWithWebhookLock(ctx, target.messenger, target.url, func() error {
+		sendStarted = true
 		return target.send(ctx, target.url, entry, config.NotificationFormatOptions(&cfg.Format))
 	}); err != nil {
+		if !sendStarted && errors.Is(err, context.Canceled) {
+			log.WithField("destination_id", target.destinationID).Warn("Context cancelled before API webhook send")
+			return false
+		}
 		log.WithFields(webhookFailureFields(target.messenger, err, log.Fields{
 			"destination_id": target.destinationID,
 			"group":          entry.Group,
@@ -1015,11 +1021,17 @@ func (s *Scheduler) processAPIRetryJob(
 		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_cancelled")).Warn("Context cancelled during API retry send delay")
 		return false
 	}
+	sendStarted := false
 	err := s.sendWithWebhookLock(ctx, item.Messenger, job.webhook.url, func() error {
+		sendStarted = true
 		return delivery.sender.SendRansomwareEntry(ctx, job.webhook.url, job.entry, config.NotificationFormatOptions(&cfg.Format))
 	})
 
 	if err != nil {
+		if !sendStarted && errors.Is(err, context.Canceled) {
+			log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_cancelled")).Warn("Context cancelled before API retry send")
+			return false
+		}
 		log.WithFields(webhookFailureFields(item.Messenger, err, log.Fields{
 			"item_key":    item.ItemKey,
 			"queue_key":   job.queueKey,
