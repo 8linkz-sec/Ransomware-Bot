@@ -453,7 +453,10 @@ func (c *Client) makeRequest(ctx context.Context, url string, target interface{}
 			lastErr = fmt.Errorf("request failed: %w", err)
 			if isRetryableNetworkError(err) {
 				if hasRemainingAPIAttempts(attempt, policy.MaxAttempts) {
-					log.WithError(err).WithField("attempt", attempt+1).Warn("API request failed, retrying...")
+					log.WithFields(log.Fields{
+						"attempt": attempt + 1,
+						"error":   OperatorErrorMessage(err),
+					}).Warn("API request failed, retrying...")
 				}
 				continue
 			}
@@ -535,7 +538,7 @@ func waitBeforeAPIRetry(
 	log.WithFields(log.Fields{
 		"attempt":  attempt + 1,
 		"delay_ms": retryDelay.Milliseconds(),
-		"url":      url,
+		"url":      redactedAPIRequestURL(url),
 	}).Debug("Retrying API request")
 
 	if retryDelay <= 0 {
@@ -676,13 +679,13 @@ func retryAfterDelay(header string, now time.Time) (time.Duration, bool) {
 // logRequest logs API request details for monitoring and debugging
 //
 // Logs include:
-// - Request URL as supplied by the caller
+// - Request host with credential-bearing URL parts redacted
 // - Response time for performance monitoring
 // - Error details for troubleshooting
 // - Uses different log levels based on success/failure
 func (c *Client) logRequest(url string, duration time.Duration, err error) {
 	fields := log.Fields{
-		"url":         url,
+		"url":         redactedAPIRequestURL(url),
 		"duration_ms": duration.Milliseconds(),
 	}
 
@@ -697,6 +700,13 @@ func (c *Client) logRequest(url string, duration time.Duration, err error) {
 	} else {
 		log.WithFields(fields).Debug("API request successful")
 	}
+}
+
+// redactedAPIRequestURL keeps the host useful for diagnostics while removing
+// userinfo, path and query data that may carry a configured credential. The
+// anchored redactor handles arbitrary query keys, not only known secret names.
+func redactedAPIRequestURL(rawURL string) string {
+	return textutil.RedactWebhookSecretsForURL(rawURL, rawURL)
 }
 
 // Close closes the HTTP client and cleans up idle connections
