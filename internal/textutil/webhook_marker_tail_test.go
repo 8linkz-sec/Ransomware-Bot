@@ -30,10 +30,10 @@ func TestRedactWebhookSecretsForURLConsumesContiguousAnchorTail(t *testing.T) {
 	}
 }
 
-func TestRedactWebhookSecretsForURLTailStopsAtURLBoundary(t *testing.T) {
+func TestRedactWebhookSecretsForURLTailStopsAtWhitespace(t *testing.T) {
 	const anchor = "https://hooks.example.test/services/T0"
 	const tail = "SYNTHETICSECRET35"
-	for _, boundary := range []string{" ", "\t", "\"", "'", "<", ")"} {
+	for _, boundary := range []string{" ", "\t", "\n", "\f", "\r"} {
 		t.Run(boundary, func(t *testing.T) {
 			input := anchor + "/B0/" + tail + boundary + "context"
 			got := RedactWebhookSecretsForURL(input, anchor)
@@ -42,6 +42,22 @@ func TestRedactWebhookSecretsForURLTailStopsAtURLBoundary(t *testing.T) {
 			}
 			if !strings.HasSuffix(got, boundary+"context") {
 				t.Fatalf("boundary or following context was lost: %q", got)
+			}
+		})
+	}
+}
+
+func TestRedactWebhookSecretsForURLConsumesPunctuationInsideTail(t *testing.T) {
+	const anchor = "https://hooks.example.test/services/T0"
+	for _, punctuation := range []string{")", "'", `"`, "<"} {
+		t.Run(punctuation, func(t *testing.T) {
+			input := "delivery to " + anchor + "/B0/SYNTHETICSEC" + punctuation + "RET failed"
+			got := RedactWebhookSecretsForURL(input, anchor)
+			if strings.Contains(got, "SYNTHETICSEC") || strings.Contains(got, "RET") {
+				t.Fatalf("punctuation split a secret URL tail: %q", got)
+			}
+			if !strings.HasSuffix(got, " failed") {
+				t.Fatalf("following message was lost: %q", got)
 			}
 		})
 	}

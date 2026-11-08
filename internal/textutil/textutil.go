@@ -986,10 +986,12 @@ func redactUnparseableWebhookURL(text, normalized string, err error) string {
 }
 
 // replaceAnchoredURLAndTail replaces every occurrence of anchor and the URL
-// bytes immediately following it. The stopping bytes mirror
-// genericHTTPURLRegex: whitespace, double or single quote, '<', or ')'. This
-// preserves message context while preventing a marker plus tail from being
-// parsed as a safe URL by the later generic redactor.
+// bytes immediately following it. Whitespace is the only safe boundary for an
+// unquoted URL: punctuation such as ')' or a quote can occur inside a path.
+// This prevents a marker plus tail from being parsed as a safe URL by the
+// later generic redactor. For a quoted exact anchor, the syntactic closing
+// quote (and optional colon) is retained only if it is the entire consumed
+// tail. A longer tail is discarded, including any punctuation within it.
 func replaceAnchoredURLAndTail(text, anchor, marker string) string {
 	if anchor == "" || !strings.Contains(text, anchor) {
 		return text
@@ -1004,10 +1006,16 @@ func replaceAnchoredURLAndTail(text, anchor, marker string) string {
 		}
 		out.WriteString(text[:start])
 		end := start + len(anchor)
-		for end < len(text) && !isASCIISpaceByte(text[end]) && !isURLTruncationDelimiter(text[end]) {
+		for end < len(text) && !isASCIISpaceByte(text[end]) {
 			end++
 		}
 		out.WriteString(marker)
+		if start > 0 && text[start-1] == '"' {
+			tail := text[start+len(anchor) : end]
+			if tail == `"` || tail == `":` {
+				out.WriteString(tail)
+			}
+		}
 		text = text[end:]
 	}
 	return out.String()
