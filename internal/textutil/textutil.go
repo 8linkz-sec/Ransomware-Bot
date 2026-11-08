@@ -855,14 +855,14 @@ func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string 
 		rawURLString := rawURL.String()
 		redacted = replaceAnchoredURLAndTail(redacted, rawURLString, marker)
 		redacted = replaceQuotedForm(redacted, rawURLString, marker)
-		// A provider may echo req.URL.Path, which is decoded, instead of
-		// req.URL.EscapedPath(). Mask that spelling of the same webhook too.
-		rawURL.RawPath = ""
-		decodedURLString := rawURL.String()
-		if decodedURLString != rawURLString {
-			redacted = replaceAnchoredURLAndTail(redacted, decodedURLString, marker)
-			redacted = replaceQuotedForm(redacted, decodedURLString, marker)
-		}
+	}
+	// A provider may echo req.URL.Path directly. RawPath is often empty for
+	// escaped punctuation, and URL.String would re-escape it, so match the
+	// literal decoded path whenever it differs from the requested spelling.
+	if parsed.Path != parsed.EscapedPath() {
+		decodedURLString := parsed.Scheme + "://" + parsed.Host + parsed.Path
+		redacted = replaceAnchoredURLAndTail(redacted, decodedURLString, marker)
+		redacted = replaceQuotedForm(redacted, decodedURLString, marker)
 	}
 	return RedactWebhookSecrets(redacted)
 }
