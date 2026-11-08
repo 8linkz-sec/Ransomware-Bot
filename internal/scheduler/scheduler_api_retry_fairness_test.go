@@ -131,11 +131,11 @@ func TestRoundRobinAPIRetryRecordsFirstCapIncludesHealthyDestination(t *testing.
 	records := loadAPIRetryRecordsForTest(t, dataDir)
 	ordered := roundRobinAPIRetryRecords(records, map[string]string{})
 
-	const cap_ = 5
-	if len(ordered) < cap_ {
-		t.Fatalf("ordered records = %d, want at least %d", len(ordered), cap_)
+	const capacity = 5
+	if len(ordered) < capacity {
+		t.Fatalf("ordered records = %d, want at least %d", len(ordered), capacity)
 	}
-	firstCap := ordered[:cap_]
+	firstCap := ordered[:capacity]
 	bInFirstCap := false
 	for _, r := range firstCap {
 		if r.Item.DestinationID == "B" {
@@ -143,7 +143,7 @@ func TestRoundRobinAPIRetryRecordsFirstCapIncludesHealthyDestination(t *testing.
 		}
 	}
 	if !bInFirstCap {
-		t.Fatalf("destination B has no item in the first %d records %v -- round-robin guarantee violated", cap_, itemKeysForTest(firstCap))
+		t.Fatalf("destination B has no item in the first %d records %v -- round-robin guarantee violated", capacity, itemKeysForTest(firstCap))
 	}
 	if ordered[0].Item.ItemKey != "A-00" {
 		t.Fatalf("first item overall = %q, want %q (the globally oldest failure must still be attempted first)", ordered[0].Item.ItemKey, "A-00")
@@ -389,20 +389,20 @@ func TestRoundRobinAPIRetryRecordsCapSmallerThanDestinationCount(t *testing.T) {
 	records := loadAPIRetryRecordsForTest(t, dataDir)
 	ordered := roundRobinAPIRetryRecords(records, map[string]string{})
 
-	const cap_ = 2
-	if len(ordered) < cap_ {
-		t.Fatalf("ordered records = %d, want at least %d", len(ordered), cap_)
+	const capacity = 2
+	if len(ordered) < capacity {
+		t.Fatalf("ordered records = %d, want at least %d", len(ordered), capacity)
 	}
-	attempted := ordered[:cap_]
-	attemptedDest := make(map[string]bool, cap_)
+	attempted := ordered[:capacity]
+	attemptedDest := make(map[string]bool, capacity)
 	for _, r := range attempted {
 		attemptedDest[r.Item.DestinationID] = true
 	}
-	if len(attemptedDest) != cap_ {
-		t.Fatalf("cap=%d < 4 destinations: expected exactly %d distinct destinations attempted, got %d (%v)", cap_, cap_, len(attemptedDest), attemptedDest)
+	if len(attemptedDest) != capacity {
+		t.Fatalf("cap=%d < 4 destinations: expected exactly %d distinct destinations attempted, got %d (%v)", capacity, capacity, len(attemptedDest), attemptedDest)
 	}
 	if !attemptedDest["slack.a"] || !attemptedDest["slack.b"] {
-		t.Fatalf("expected the two globally-oldest destinations (slack.a, slack.b) to be attempted under cap=%d, got %v", cap_, attemptedDest)
+		t.Fatalf("expected the two globally-oldest destinations (slack.a, slack.b) to be attempted under cap=%d, got %v", capacity, attemptedDest)
 	}
 }
 
