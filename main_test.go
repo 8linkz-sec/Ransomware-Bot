@@ -661,49 +661,54 @@ func TestCheckConfigWarnsWhenWebhookEndpointsShareURL(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=TestCheckConfigWarnsWhenWebhookEndpointsShareURL") //nolint:gosec // G204: re-execs this test binary with a fixed -test.run flag, not external input
-			cmd.Env = append(os.Environ(),
-				"RANSOMWARE_BOT_CHECK_CONFIG_SHARED_URL_HELPER=1",
-				"RANSOMWARE_BOT_TEST_CONFIG_DIR="+configDir,
-				"RANSOMWARE_BOT_TEST_DATA_DIR="+dataDir,
-				"RANSOMWARE_BOT_TEST_LOCALE="+tc.locale,
-			)
-
-			// stdout and stderr are captured separately on purpose: the
-			// localized warning is an operator-surface line and must be on
-			// STDOUT. The logrus WARN reaches stderr from the same load; a
-			// combined capture would pass even if runCheckConfig printed to
-			// stderr only.
-			var stdout, stderr bytes.Buffer
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-			if err := cmd.Run(); err != nil {
-				t.Fatalf("check-config helper failed unexpectedly: %v; stdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
-			}
-			out := stdout.String()
-			combined := out + stderr.String()
-
-			if !strings.Contains(out, tc.wantWarning) {
-				t.Fatalf("stdout = %q, want shared webhook URL warning %q on stdout", out, tc.wantWarning)
-			}
-			if !strings.Contains(out, tc.wantValid) {
-				t.Fatalf("stdout = %q, want %q", out, tc.wantValid)
-			}
-			// The warning must precede "Configuration valid" so a script that
-			// stops reading at the valid line still sees it.
-			if strings.Index(out, tc.wantWarning) > strings.Index(out, tc.wantValid) {
-				t.Fatalf("stdout = %q, want the shared-URL warning before %q", out, tc.wantValid)
-			}
-			// Neither stream may carry the URL or its token.
-			if strings.Contains(combined, "/api/webhooks/") || strings.Contains(combined, "secretAAAABBBBCCCC012345") {
-				t.Fatalf("output = %q, want no webhook URL or token", combined)
-			}
-			// --check-config runs with runtimeMode false, so no logger is
-			// configured and the logrus service field is never attached.
-			if strings.Contains(combined, "service=") {
-				t.Fatalf("output = %q, want no service field in check-config mode", combined)
-			}
+			assertSharedURLCheckConfigSubprocess(t, configDir, dataDir, tc.locale, tc.wantWarning, tc.wantValid)
 		})
+	}
+}
+
+func assertSharedURLCheckConfigSubprocess(t *testing.T, configDir, dataDir, locale, wantWarning, wantValid string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestCheckConfigWarnsWhenWebhookEndpointsShareURL") //nolint:gosec // G204: re-execs this test binary with a fixed -test.run flag, not external input
+	cmd.Env = append(os.Environ(),
+		"RANSOMWARE_BOT_CHECK_CONFIG_SHARED_URL_HELPER=1",
+		"RANSOMWARE_BOT_TEST_CONFIG_DIR="+configDir,
+		"RANSOMWARE_BOT_TEST_DATA_DIR="+dataDir,
+		"RANSOMWARE_BOT_TEST_LOCALE="+locale,
+	)
+
+	// stdout and stderr are captured separately on purpose: the
+	// localized warning is an operator-surface line and must be on
+	// STDOUT. The logrus WARN reaches stderr from the same load; a
+	// combined capture would pass even if runCheckConfig printed to
+	// stderr only.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("check-config helper failed unexpectedly: %v; stdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	combined := out + stderr.String()
+
+	if !strings.Contains(out, wantWarning) {
+		t.Fatalf("stdout = %q, want shared webhook URL warning %q on stdout", out, wantWarning)
+	}
+	if !strings.Contains(out, wantValid) {
+		t.Fatalf("stdout = %q, want %q", out, wantValid)
+	}
+	// The warning must precede "Configuration valid" so a script that
+	// stops reading at the valid line still sees it.
+	if strings.Index(out, wantWarning) > strings.Index(out, wantValid) {
+		t.Fatalf("stdout = %q, want the shared-URL warning before %q", out, wantValid)
+	}
+	// Neither stream may carry the URL or its token.
+	if strings.Contains(combined, "/api/webhooks/") || strings.Contains(combined, "secretAAAABBBBCCCC012345") {
+		t.Fatalf("output = %q, want no webhook URL or token", combined)
+	}
+	// --check-config runs with runtimeMode false, so no logger is
+	// configured and the logrus service field is never attached.
+	if strings.Contains(combined, "service=") {
+		t.Fatalf("output = %q, want no service field in check-config mode", combined)
 	}
 }
 
