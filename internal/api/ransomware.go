@@ -135,7 +135,7 @@ func (c *Client) GetLatestEntries(ctx context.Context) ([]RansomwareEntry, error
 	}
 	url := baseURL + "/victims/recent"
 
-	log.WithField("url", url).Debug("Fetching latest ransomware entries")
+	log.WithField("url", redactedAPIRequestURL(url)).Debug("Fetching latest ransomware entries")
 
 	var response ransomwareLatestResponse
 	err := c.makeRequest(ctx, url, &response)

@@ -7,6 +7,7 @@
 - Config reload log lines no longer contain a fingerprint of your API key or webhook URLs.
 - RSS polling leaves feeds that finish after the cycle deadline for the next cycle.
 - Slack ransomware alerts place the Website field closer to its configured position.
+- API request logs hide configured URL credentials, including query values containing `)`.
 
 ## 1.2.0 - 2026-09-18
 

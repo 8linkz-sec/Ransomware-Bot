@@ -1546,14 +1546,13 @@ func RedactURLCredentials(text string) string {
 //	old: Get "[redacted URL]"TAIL@real-host.example/path": dial tcp: no such host   (leaks TAIL, real-host.example)
 //	new: Get "[redacted URL] dial tcp: no such host
 //
-// The signal used to decide a delimiter genuinely split a credential, rather
-// than merely closing a complete, self-contained URL (a trailing quote in
-// `Get "https://host/path": ...`, a trailing paren in prose, `(see
-// https://host/path)`), is narrow and specific: does the contiguous run of
-// non-whitespace bytes starting AT the delimiter contain an `@`? That `@` is
-// what a smuggled userinfo section needs to reach its real host -- a
-// complete match's trailing punctuation never has one immediately attached,
-// so this fires only on the shape it exists for. Verified this is not
+// One signal that a delimiter split a credential, rather than merely closing
+// a complete URL, is an `@` in the contiguous non-whitespace tail: a smuggled
+// userinfo section needs it to reach the real host. A second signal is a raw
+// `)` followed by more non-whitespace bytes after a sensitive query key. Go
+// preserves that byte in RawQuery when formatting a URL, so the regex stops
+// before the remaining bytes of its value. In that ambiguous case the whole
+// tail is discarded. A lone closing `)` remains untouched. Verified this is not
 // over-broad: the F5 "smuggled userinfo" success-branch tests
 // (authority_truncation_success_test.go, whose matches end at a delimiter
 // with nothing but JSON/error punctuation after them, no `@`) and the
@@ -1567,9 +1566,9 @@ func RedactURLCredentials(text string) string {
 // found and masked something real" apart from "the match is simply complete,
 // and the delimiter is unrelated trailing punctuation".
 //
-// When the tail run has no `@`, this is a complete no-op: redact's own
-// result is used exactly as ReplaceAllStringFunc would have used it, byte
-// for byte. When it does, redact's result is discarded and the ENTIRE
+// When neither signal fires, this is a complete no-op: redact's own result
+// is used exactly as ReplaceAllStringFunc would have used it, byte for byte.
+// When either fires, redact's result is discarded and the ENTIRE
 // combined span (the original match, the delimiter, and the tail run) is
 // replaced with the same unconditional "[redacted URL]" marker every other
 // fallback in this file already uses -- never deriving a host or any other
@@ -1606,7 +1605,8 @@ func redactURLMatches(text string, re *regexp.Regexp, redact func(match string) 
 			for tailEnd < len(text) && !isASCIISpaceByte(text[tailEnd]) {
 				tailEnd++
 			}
-			if strings.IndexByte(text[end:tailEnd], '@') >= 0 {
+			if strings.IndexByte(text[end:tailEnd], '@') >= 0 ||
+				rightParenSplitsSensitiveQuery(text[start:end], text[end:tailEnd]) {
 				b.WriteString(redactedURLMarker)
 				last = tailEnd
 				continue
@@ -1617,6 +1617,25 @@ func redactURLMatches(text string, re *regexp.Regexp, redact func(match string) 
 	}
 	b.WriteString(text[last:])
 	return b.String()
+}
+
+// rightParenSplitsSensitiveQuery is deliberately conservative: after a
+// sensitive query value, a non-whitespace suffix following `)` may be the rest
+// of that value. The URL regex cannot distinguish it from adjacent prose, so
+// discard the combined span rather than risk logging a token tail. A query in
+// a malformed URL is checked from its raw bytes because the ordinary redactor
+// would otherwise replace only the matched prefix with a generic marker.
+func rightParenSplitsSensitiveQuery(match, tail string) bool {
+	if len(tail) <= 1 || tail[0] != ')' {
+		return false
+	}
+	_, rawQuery, hasQuery := strings.Cut(match, "?")
+	if !hasQuery {
+		return false
+	}
+	rawQuery, _, _ = strings.Cut(rawQuery, "#")
+	_, hasSensitiveKey := redactRawQuery(rawQuery)
+	return hasSensitiveKey
 }
 
 // isURLTruncationDelimiter reports whether b is one of the four bytes

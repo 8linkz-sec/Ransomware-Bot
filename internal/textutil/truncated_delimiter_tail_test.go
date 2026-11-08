@@ -19,6 +19,8 @@ import (
 // redactURLMatches's own doc comment in textutil.go for the full design
 // rationale, including why the gate is deliberately narrow and what it does
 // not close.
+// The 2026-11-08 sensitive-query `)` extension is pinned separately in
+// query_delimiter_tail_test.go.
 
 // TestRedactURLCredentialsDoesNotLeakTailAfterQuoteTruncatesUserinfo is the
 // exact reported shape: a literal double quote inside a credential ends the
