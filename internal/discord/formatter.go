@@ -743,7 +743,7 @@ func discordNaturalText(value string, maxLength int) string {
 		return ""
 	}
 	if maxLength <= 2 {
-		return textutil.TruncateText(value, maxLength)
+		return textutil.TruncateText(tinyTextWithoutBidiControls(value, maxLength), maxLength)
 	}
 	return textutil.BidiIsolate(textutil.TruncateText(value, maxLength-2))
 }
@@ -759,7 +759,7 @@ func discordRichText(value string, maxLength int) string {
 	}
 	escaped := escapeDiscordMarkdownText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateText(escaped, maxLength)
+		return textutil.TruncateText(tinyTextWithoutBidiControls(escaped, maxLength), maxLength)
 	}
 	return textutil.BidiIsolate(textutil.TrimDanglingEscape(textutil.TruncateText(escaped, maxLength-2)))
 }
@@ -770,7 +770,7 @@ func discordDescriptionText(value string, maxLength int) string {
 	}
 	escaped := escapeDiscordMarkdownText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateDescription(escaped, maxLength)
+		return textutil.TruncateDescription(tinyTextWithoutBidiControls(escaped, maxLength), maxLength)
 	}
 	return textutil.BidiIsolate(textutil.TrimDanglingEscape(textutil.TruncateDescription(escaped, maxLength-2)))
 }
@@ -781,7 +781,17 @@ func discordURLText(value string, maxLength int) string {
 	}
 	escaped := escapeDiscordMarkdownText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateMiddle(escaped, maxLength)
+		return textutil.TruncateMiddle(tinyTextWithoutBidiControls(escaped, maxLength), maxLength)
 	}
 	return textutil.BidiIsolateLTR(textutil.TrimDanglingEscape(textutil.TruncateMiddle(escaped, maxLength-2)))
+}
+
+// A controls-only value still needs a nonempty field value at a positive tiny
+// budget; Discord rejects empty embed fields.
+func tinyTextWithoutBidiControls(value string, maxLength int) string {
+	stripped := textutil.StripBidiControls(value)
+	if value != "" && stripped == "" && maxLength > 0 {
+		return "-"
+	}
+	return stripped
 }
