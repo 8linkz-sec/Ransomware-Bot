@@ -142,28 +142,38 @@ func TestSlackEntityTruncationEveryBoundaryKeepsCompleteEntitiesAndLimit(t *test
 		for _, value := range []string{"&", "<", ">", "a&b<c>d", "&<>a&<>z", "long text before & and after <tag>"} {
 			for limit := 0; limit <= 60; limit++ {
 				got := render.fn(value, limit)
-				if utf8.RuneCountInString(got) > limit {
-					t.Fatalf("%s(%q, %d) exceeded limit: %q", render.name, value, limit, got)
-				}
-				for remaining := got; remaining != ""; {
-					index := strings.IndexByte(remaining, '&')
-					if index < 0 {
-						break
-					}
-					remaining = remaining[index:]
-					matched := false
-					for _, entity := range []string{"&amp;", "&lt;", "&gt;"} {
-						if strings.HasPrefix(remaining, entity) {
-							remaining = remaining[len(entity):]
-							matched = true
-							break
-						}
-					}
-					if !matched {
-						t.Fatalf("%s(%q, %d) left partial Slack entity: %q", render.name, value, limit, got)
-					}
-				}
+				assertSlackEntityWithinBudget(t, render.name, value, limit, got)
 			}
+		}
+	}
+}
+
+func assertSlackEntityWithinBudget(t *testing.T, name, value string, limit int, got string) {
+	t.Helper()
+	if utf8.RuneCountInString(got) > limit {
+		t.Fatalf("%s(%q, %d) exceeded limit: %q", name, value, limit, got)
+	}
+	assertSlackCompleteEntities(t, name, value, limit, got)
+}
+
+func assertSlackCompleteEntities(t *testing.T, name, value string, limit int, got string) {
+	t.Helper()
+	for remaining := got; remaining != ""; {
+		index := strings.IndexByte(remaining, '&')
+		if index < 0 {
+			break
+		}
+		remaining = remaining[index:]
+		matched := false
+		for _, entity := range []string{"&amp;", "&lt;", "&gt;"} {
+			if strings.HasPrefix(remaining, entity) {
+				remaining = remaining[len(entity):]
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			t.Fatalf("%s(%q, %d) left partial Slack entity: %q", name, value, limit, got)
 		}
 	}
 }
