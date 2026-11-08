@@ -839,7 +839,22 @@ func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string 
 			marker = rawScheme + "://" + rawHost + redactedPathMarker
 		}
 	}
-	redacted := replaceAnchoredURLAndTail(text, normalized, marker)
+	redacted := redactProviderFullURLVariants(text, normalized, parsed, marker)
+	redacted = redactProviderStandaloneVariants(redacted, parsed)
+	return RedactWebhookSecrets(redacted)
+}
+
+func redactProviderFullURLVariants(text, normalized string, parsed *url.URL, marker string) string {
+	// Match the whole decoded query before shorter URL prefixes: a decoded
+	// %20 or + otherwise ends the tail scan and exposes its suffix.
+	if decodedQuery, err := url.QueryUnescape(parsed.RawQuery); parsed.RawQuery != "" && err == nil && decodedQuery != parsed.RawQuery {
+		for _, path := range []string{parsed.EscapedPath(), parsed.Path} {
+			decodedURL := parsed.Scheme + "://" + parsed.Host + path + "?" + decodedQuery
+			text = replaceAnchoredURLAndTail(text, decodedURL, marker)
+			text = replaceQuotedForm(text, decodedURL, marker)
+		}
+	}
+	text = replaceAnchoredURLAndTail(text, normalized, marker)
 	// Same %q-escaped-form pass the fallback's tier two runs below, and
 	// for the identical reason: text is normally (*url.Error).Error(),
 	// which renders with %q, so a normalized containing a backslash or
@@ -847,16 +862,72 @@ func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string 
 	// \") that the raw ReplaceAll above cannot match. See the doc
 	// comment above for why this branch needed its own pass (F3, found
 	// 2026-09-04, third instance of this defect class).
-	redacted = replaceQuotedForm(redacted, normalized, marker)
+	text = replaceQuotedForm(text, normalized, marker)
 	if parsed.RawPath != "" {
 		rawURL := *parsed
 		rawURL.RawQuery = ""
 		rawURL.Fragment = ""
 		rawURLString := rawURL.String()
-		redacted = replaceAnchoredURLAndTail(redacted, rawURLString, marker)
-		redacted = replaceQuotedForm(redacted, rawURLString, marker)
+		text = replaceAnchoredURLAndTail(text, rawURLString, marker)
+		text = replaceQuotedForm(text, rawURLString, marker)
 	}
-	return RedactWebhookSecrets(redacted)
+	// A provider may echo req.URL.Path directly. RawPath is often empty for
+	// escaped punctuation, and URL.String would re-escape it, so match the
+	// literal decoded path whenever it differs from the requested spelling.
+	if parsed.Path != parsed.EscapedPath() {
+		decodedURLString := parsed.Scheme + "://" + parsed.Host + parsed.Path
+		text = replaceAnchoredURLAndTail(text, decodedURLString, marker)
+		text = replaceQuotedForm(text, decodedURLString, marker)
+	}
+	return text
+}
+
+func redactProviderStandaloneVariants(text string, parsed *url.URL) string {
+	pathMarker := redactedWebhookPath(parsed.Path)
+	decodedQuery, decodeErr := url.QueryUnescape(parsed.RawQuery)
+	decoded := decodeErr == nil && decodedQuery != parsed.RawQuery
+	text = redactStandalonePathQueries(text, parsed, pathMarker, decodedQuery, decoded)
+	// Some providers echo only req.URL.Path, EscapedPath, or RequestURI.
+	// Preserve the public prefix while masking the configured tail.
+	for _, path := range []string{parsed.EscapedPath(), parsed.Path} {
+		if path != "" && path != "/" {
+			text = replaceStandaloneEcho(text, path, pathMarker)
+		}
+	}
+	// A provider may report only RawQuery or its decoded form.
+	return redactStandaloneQuery(text, parsed.RawQuery, decodedQuery, decoded)
+}
+
+func redactStandalonePathQueries(text string, parsed *url.URL, marker, decodedQuery string, decoded bool) string {
+	if parsed.RawQuery == "" {
+		return text
+	}
+	for _, path := range []string{parsed.EscapedPath(), parsed.Path} {
+		if path == "" {
+			continue
+		}
+		if decoded {
+			text = replaceStandaloneEcho(text, path+"?"+decodedQuery, marker)
+		}
+		text = replaceStandaloneEcho(text, path+"?"+parsed.RawQuery, marker)
+	}
+	return text
+}
+
+func redactStandaloneQuery(text, rawQuery, decodedQuery string, decoded bool) string {
+	if rawQuery == "" {
+		return text
+	}
+	if decoded {
+		text = replaceStandaloneEcho(text, decodedQuery, redactedValueMarker)
+	}
+	return replaceStandaloneEcho(text, rawQuery, redactedValueMarker)
+}
+
+func replaceStandaloneEcho(text, anchor, marker string) string {
+	text = replaceAnchoredStandaloneAndTail(text, anchor, marker)
+	quoted := strconv.Quote(anchor)
+	return replaceAnchoredStandaloneAndTail(text, quoted[1:len(quoted)-1], marker)
 }
 
 func redactUnparseableWebhookURL(text, normalized string, err error) string {
@@ -1022,6 +1093,65 @@ func replaceAnchoredURLAndTail(text, anchor, marker string) string {
 		text = text[end:]
 	}
 	return out.String()
+}
+
+// replaceAnchoredStandaloneAndTail matches a provider's path or query echo
+// at a standalone boundary. Full configured URL forms run before this pass.
+func replaceAnchoredStandaloneAndTail(text, anchor, marker string) string {
+	if anchor == "" || !strings.Contains(text, anchor) {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text))
+	for len(text) > 0 {
+		start := standaloneAnchorStart(text, anchor)
+		if start < 0 {
+			out.WriteString(text)
+			break
+		}
+		out.WriteString(text[:start])
+		end := start + len(anchor)
+		for end < len(text) && !isASCIISpaceByte(text[end]) {
+			end++
+		}
+		out.WriteString(marker)
+		if start > 0 && text[start-1] == '"' {
+			tail := text[start+len(anchor) : end]
+			if tail == `"` || tail == `":` {
+				out.WriteString(tail)
+			}
+		}
+		text = text[end:]
+	}
+	return out.String()
+}
+
+func standaloneAnchorStart(text, anchor string) int {
+	search := 0
+	for search < len(text) {
+		index := strings.Index(text[search:], anchor)
+		if index < 0 {
+			return -1
+		}
+		start := search + index
+		if start == 0 || isStandaloneEchoBoundary(text[start-1]) {
+			return start
+		}
+		search = start + 1
+	}
+	return -1
+}
+
+func isStandaloneEchoBoundary(previous byte) bool {
+	if isASCIISpaceByte(previous) {
+		return true
+	}
+	switch previous {
+	case '"', '\'', '(', '[', '{', '=', ':', '>', '?':
+		return true
+	default:
+		return false
+	}
 }
 
 // replaceQuotedForm additionally replaces anchor's strconv.Quote-escaped form
