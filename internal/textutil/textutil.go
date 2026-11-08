@@ -568,6 +568,7 @@ func RedactWebhookSecrets(text string) string {
 	if text == "" {
 		return ""
 	}
+	text = redactUnanchoredURLParseErrorDetails(text)
 
 	redacted := discordWebhookURLRegex.ReplaceAllStringFunc(text, func(match string) string {
 		domain := discordWebhookHost
@@ -585,6 +586,72 @@ func RedactWebhookSecrets(text string) string {
 	})
 
 	return RedactURLCredentials(redacted)
+}
+
+// redactUnanchoredURLParseErrorDetails handles a net/url parse error after its
+// original URL has been reduced to plain text by a caller. Only a quoted URL
+// field whose following detail can be reproduced by url.Parse is trusted as
+// the source of a secret fragment. The field itself is fully masked: without
+// an external anchor, even a parsed host may be a misread credential.
+func redactUnanchoredURLParseErrorDetails(text string) string {
+	var redacted strings.Builder
+	lastCopied := 0
+	for offset := 0; offset < len(text); {
+		start := strings.Index(text[offset:], `parse "`)
+		if start < 0 {
+			break
+		}
+		matchStart := offset + start
+		// A rejected quote pair may contain another complete parse error.
+		// Advance only past this opener until the candidate is verified.
+		offset = matchStart + len(`parse "`)
+		quotedStart := matchStart + len("parse ")
+		quotedEnd := closingQuotedStringIndex(text, quotedStart)
+		if quotedEnd < 0 {
+			break
+		}
+		afterQuoted := quotedEnd + 1
+		if !strings.HasPrefix(text[afterQuoted:], ": ") {
+			continue
+		}
+		quotedURL := text[quotedStart : quotedEnd+1]
+		rawURL, err := strconv.Unquote(quotedURL)
+		scheme, _, hasAuthority := strings.Cut(rawURL, "://")
+		if err != nil || !hasAuthority || (!strings.EqualFold(scheme, "http") && !strings.EqualFold(scheme, "https")) {
+			continue
+		}
+		_, parseErr := url.Parse(rawURL)
+		var urlErr *url.Error
+		if !errors.As(parseErr, &urlErr) || urlErr.Err == nil ||
+			!strings.HasPrefix(text[afterQuoted+2:], urlErr.Err.Error()) {
+			continue
+		}
+		detailEnd := afterQuoted + 2 + len(urlErr.Err.Error())
+		span := redactURLErrorSubstringFragments(text[matchStart:detailEnd], parseErr, rawURL)
+		span = strings.Replace(span, quotedURL[1:len(quotedURL)-1], redactedURLMarker, 1)
+		redacted.WriteString(text[lastCopied:matchStart])
+		redacted.WriteString(span)
+		lastCopied = detailEnd
+		offset = detailEnd
+	}
+	if lastCopied == 0 {
+		return text
+	}
+	redacted.WriteString(text[lastCopied:])
+	return redacted.String()
+}
+
+func closingQuotedStringIndex(text string, start int) int {
+	for i := start + 1; i < len(text); i++ {
+		if text[i] == '\\' {
+			i++
+			continue
+		}
+		if text[i] == '"' {
+			return i
+		}
+	}
+	return -1
 }
 
 // RedactWebhookSecretsForURL redacts standard webhook secrets and additionally
