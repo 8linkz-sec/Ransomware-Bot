@@ -44,6 +44,12 @@ func TestRemovedDependenciesDoNotReappear(t *testing.T) {
 		t.Fatalf("walk internal package tree: %v", err)
 	}
 
+	assertRemovedDependenciesAbsentFromFiles(t, checkedFiles, forbidden)
+	assertRemovedDependenciesAbsentFromModuleGraph(t, root, forbidden)
+}
+
+func assertRemovedDependenciesAbsentFromFiles(t *testing.T, checkedFiles, forbidden []string) {
+	t.Helper()
 	for _, path := range checkedFiles {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -55,7 +61,10 @@ func TestRemovedDependenciesDoNotReappear(t *testing.T) {
 			}
 		}
 	}
+}
 
+func assertRemovedDependenciesAbsentFromModuleGraph(t *testing.T, root string, forbidden []string) {
+	t.Helper()
 	cmd := exec.Command("go", "list", "-m", "all")
 	cmd.Dir = root
 	output, err := cmd.CombinedOutput()

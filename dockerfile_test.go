@@ -23,11 +23,7 @@ func TestDockerfileFromArgsAreDeclaredGlobally(t *testing.T) {
 		}
 		upperLine := strings.ToUpper(line)
 		if strings.HasPrefix(upperLine, "FROM ") {
-			for _, match := range fromArgPattern.FindAllStringSubmatch(line, -1) {
-				if _, ok := globalArgs[match[1]]; !ok {
-					t.Fatalf("Dockerfile FROM references ${%s} before a global ARG declaration", match[1])
-				}
-			}
+			assertDockerfileFromArgsDeclaredGlobally(t, line, fromArgPattern, globalArgs)
 			globalScope = false
 			continue
 		}
@@ -44,6 +40,15 @@ func TestDockerfileFromArgsAreDeclaredGlobally(t *testing.T) {
 			// Once the first non-ARG instruction is reached, following ARG
 			// values are stage-local and cannot satisfy FROM interpolation.
 			break
+		}
+	}
+}
+
+func assertDockerfileFromArgsDeclaredGlobally(t *testing.T, line string, pattern *regexp.Regexp, globalArgs map[string]struct{}) {
+	t.Helper()
+	for _, match := range pattern.FindAllStringSubmatch(line, -1) {
+		if _, ok := globalArgs[match[1]]; !ok {
+			t.Fatalf("Dockerfile FROM references ${%s} before a global ARG declaration", match[1])
 		}
 	}
 }
