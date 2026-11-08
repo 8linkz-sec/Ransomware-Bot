@@ -401,7 +401,7 @@ func DefaultConfig() *Config {
 		LogFilePath:   "./logs/bot.log",
 		MaxRSSWorkers: 5, // Default number of RSS workers
 		LogRotation: LogRotation{
-			MaxSizeMB:  10,   // 10 MB per file
+			MaxSizeMB:  10,   // 10 MiB per file; the config key retains its historical name
 			MaxBackups: 30,   // Keep 30 old files for incident reconstruction
 			MaxAgeDays: 90,   // Delete files older than 90 days
 			Compress:   true, // Compress old files
