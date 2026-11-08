@@ -24,18 +24,20 @@ const (
 	hashD = "hash-D"
 )
 
+type destinationDiffScenario struct {
+	name         string
+	previous     map[string]string
+	current      map[string]string
+	wantHasRemap bool
+	wantKind     string
+	wantRemapped []string
+	wantAdded    []string
+	wantRemoved  []string
+	wantMovement string
+}
+
 func TestDiffDestinationsClassifiesScenarios(t *testing.T) {
-	tests := []struct {
-		name         string
-		previous     map[string]string
-		current      map[string]string
-		wantHasRemap bool
-		wantKind     string
-		wantRemapped []string
-		wantAdded    []string
-		wantRemoved  []string
-		wantMovement string
-	}{
+	tests := []destinationDiffScenario{
 		{
 			// Section 4 row (a): urls [A,B] -> [B,A] on a ransomware block, so
 			// both the API and the RSS ID family move together.
@@ -216,27 +218,32 @@ func TestDiffDestinationsClassifiesScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			diff := DiffDestinations(tt.previous, tt.current)
-
-			if got := diff.HasRemap(); got != tt.wantHasRemap {
-				t.Fatalf("HasRemap() = %v, want %v (diff=%+v)", got, tt.wantHasRemap, diff)
-			}
-			if got := diff.Kind(); got != tt.wantKind {
-				t.Fatalf("Kind() = %q, want %q (diff=%+v)", got, tt.wantKind, diff)
-			}
-			if got := diff.RemappedIDs(); !equalStringSlices(got, tt.wantRemapped) {
-				t.Fatalf("RemappedIDs() = %v, want %v", got, tt.wantRemapped)
-			}
-			if !equalStringSlices(diff.Added, tt.wantAdded) {
-				t.Fatalf("Added = %v, want %v", diff.Added, tt.wantAdded)
-			}
-			if !equalStringSlices(diff.Removed, tt.wantRemoved) {
-				t.Fatalf("Removed = %v, want %v", diff.Removed, tt.wantRemoved)
-			}
-			if got := diff.Movements(); got != tt.wantMovement {
-				t.Fatalf("Movements() = %q, want %q", got, tt.wantMovement)
-			}
+			assertDestinationDiffScenario(t, tt)
 		})
+	}
+}
+
+func assertDestinationDiffScenario(t *testing.T, tt destinationDiffScenario) {
+	t.Helper()
+	diff := DiffDestinations(tt.previous, tt.current)
+
+	if got := diff.HasRemap(); got != tt.wantHasRemap {
+		t.Fatalf("HasRemap() = %v, want %v (diff=%+v)", got, tt.wantHasRemap, diff)
+	}
+	if got := diff.Kind(); got != tt.wantKind {
+		t.Fatalf("Kind() = %q, want %q (diff=%+v)", got, tt.wantKind, diff)
+	}
+	if got := diff.RemappedIDs(); !equalStringSlices(got, tt.wantRemapped) {
+		t.Fatalf("RemappedIDs() = %v, want %v", got, tt.wantRemapped)
+	}
+	if !equalStringSlices(diff.Added, tt.wantAdded) {
+		t.Fatalf("Added = %v, want %v", diff.Added, tt.wantAdded)
+	}
+	if !equalStringSlices(diff.Removed, tt.wantRemoved) {
+		t.Fatalf("Removed = %v, want %v", diff.Removed, tt.wantRemoved)
+	}
+	if got := diff.Movements(); got != tt.wantMovement {
+		t.Fatalf("Movements() = %q, want %q", got, tt.wantMovement)
 	}
 }
 
@@ -288,23 +295,27 @@ func TestDiffDestinationsEmptyInputs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			diff := DiffDestinations(tt.previous, tt.current)
-			if diff.HasRemap() {
-				t.Fatalf("HasRemap() = true, want false")
-			}
-			if got := diff.Kind(); got != "" {
-				t.Fatalf("Kind() = %q, want empty", got)
-			}
-			if len(diff.Remapped) != 0 || len(diff.Added) != 0 || len(diff.Removed) != 0 {
-				t.Fatalf("diff = %+v, want zero valued", diff)
-			}
-			if got := diff.Movements(); got != "" {
-				t.Fatalf("Movements() = %q, want empty", got)
-			}
-			if got := diff.RemappedIDs(); len(got) != 0 {
-				t.Fatalf("RemappedIDs() = %v, want empty", got)
-			}
+			assertEmptyDestinationDiff(t, DiffDestinations(tt.previous, tt.current))
 		})
+	}
+}
+
+func assertEmptyDestinationDiff(t *testing.T, diff DestinationDiff) {
+	t.Helper()
+	if diff.HasRemap() {
+		t.Fatalf("HasRemap() = true, want false")
+	}
+	if got := diff.Kind(); got != "" {
+		t.Fatalf("Kind() = %q, want empty", got)
+	}
+	if len(diff.Remapped) != 0 || len(diff.Added) != 0 || len(diff.Removed) != 0 {
+		t.Fatalf("diff = %+v, want zero valued", diff)
+	}
+	if got := diff.Movements(); got != "" {
+		t.Fatalf("Movements() = %q, want empty", got)
+	}
+	if got := diff.RemappedIDs(); len(got) != 0 {
+		t.Fatalf("RemappedIDs() = %v, want empty", got)
 	}
 }
 
