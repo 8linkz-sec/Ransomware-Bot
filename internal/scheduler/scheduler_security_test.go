@@ -23,25 +23,9 @@ import (
 func enqueueRetryForTest(
 	t *testing.T,
 	tracker *status.Tracker,
-	itemKey, destinationID, messenger, itemType, title, lastError string,
-	maxAttempts int,
-	retryWindow time.Duration,
-	payload ...[]byte,
+	req status.RetryRequest,
 ) bool {
 	t.Helper()
-	req := status.RetryRequest{
-		ItemKey:       itemKey,
-		DestinationID: destinationID,
-		Messenger:     status.Messenger(messenger),
-		ItemType:      status.RetryItemType(itemType),
-		Title:         title,
-		LastError:     lastError,
-		MaxAttempts:   maxAttempts,
-		RetryWindow:   retryWindow,
-	}
-	if len(payload) > 0 {
-		req.Payload = payload[0]
-	}
 	return tracker.EnqueueRetry(req)
 }
 
@@ -117,10 +101,28 @@ func TestPendingAPIEntriesSkipsDeadLetteredItems(t *testing.T) {
 	}
 	key := api.GenerateEntryKey(entry)
 
-	if !enqueueRetryForTest(t, s.statusTracker, key, webhookURL, "discord", "api", "Example", "first failure", 1, time.Hour) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       key,
+		DestinationID: webhookURL,
+		Messenger:     status.Messenger("discord"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "first failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("first EnqueueRetry() unexpectedly failed")
 	}
-	if enqueueRetryForTest(t, s.statusTracker, key, webhookURL, "discord", "api", "Example", "second failure", 1, time.Hour) {
+	if enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       key,
+		DestinationID: webhookURL,
+		Messenger:     status.Messenger("discord"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "second failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("second EnqueueRetry() should dead-letter item")
 	}
 
@@ -163,10 +165,28 @@ func TestFilterDeadLetteredRSSItems(t *testing.T) {
 		Published: "2026-01-01 00:00:00",
 	}
 
-	if !enqueueRetryForTest(t, s.statusTracker, item.Key, webhookURL, "discord", "rss", item.Title, "first failure", 1, time.Hour) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       item.Key,
+		DestinationID: webhookURL,
+		Messenger:     status.Messenger("discord"),
+		ItemType:      status.RetryItemType("rss"),
+		Title:         item.Title,
+		LastError:     "first failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("first EnqueueRetry() unexpectedly failed")
 	}
-	if enqueueRetryForTest(t, s.statusTracker, item.Key, webhookURL, "discord", "rss", item.Title, "second failure", 1, time.Hour) {
+	if enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       item.Key,
+		DestinationID: webhookURL,
+		Messenger:     status.Messenger("discord"),
+		ItemType:      status.RetryItemType("rss"),
+		Title:         item.Title,
+		LastError:     "second failure",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("second EnqueueRetry() should dead-letter RSS item")
 	}
 
@@ -395,7 +415,17 @@ func TestProcessAPIRetryQueuePersistsFailureOnlyRetryUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(entry) error = %v", err)
 	}
-	if !enqueueRetryForTest(t, s.statusTracker, key, server.URL, "slack", "api", "Example Corp", "first failure", 5, time.Hour, payload) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       key,
+		DestinationID: server.URL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "first failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("initial EnqueueRetry() unexpectedly failed")
 	}
 	if err := s.statusTracker.SavePendingChanges(); err != nil {
@@ -438,7 +468,17 @@ func TestProcessAPIRetryQueueDeadLettersPermanentFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(entry) error = %v", err)
 	}
-	if !enqueueRetryForTest(t, s.statusTracker, key, server.URL, "slack", "api", "Example Corp", "first failure", 5, time.Hour, payload) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       key,
+		DestinationID: server.URL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "first failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("initial EnqueueRetry() unexpectedly failed")
 	}
 
@@ -493,7 +533,17 @@ func TestCheckAPIOnceProcessesRetryQueueWhenAPIFetchFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(entry) error = %v", err)
 	}
-	if !enqueueRetryForTest(t, s.statusTracker, key, slackServer.URL, "slack", "api", "Example Corp", "temporary failure", 5, time.Hour, payload) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       key,
+		DestinationID: slackServer.URL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	if err := s.statusTracker.SavePendingChanges(); err != nil {
@@ -517,7 +567,16 @@ func TestProcessAPIRetryQueueDeadLettersMissingPayload(t *testing.T) {
 	s := newTestScheduler(t)
 	webhookURL := "https://hooks.slack.com/services/T12345678/B12345678/testtoken1234567890"
 	s.config.SlackWebhooks.Ransomware = config.WebhookConfig{Enabled: true, URL: webhookURL}
-	if !enqueueRetryForTest(t, s.statusTracker, "api-item", webhookURL, "slack", "api", "Missing Payload", "temporary failure", 5, time.Hour) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       "api-item",
+		DestinationID: webhookURL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Missing Payload",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -542,7 +601,17 @@ func TestProcessAPIRetryQueueDeadLettersMalformedPayload(t *testing.T) {
 	s := newTestScheduler(t)
 	webhookURL := "https://hooks.slack.com/services/T12345678/B12345678/testtoken1234567890"
 	s.config.SlackWebhooks.Ransomware = config.WebhookConfig{Enabled: true, URL: webhookURL}
-	if !enqueueRetryForTest(t, s.statusTracker, "api-item", webhookURL, "slack", "api", "Malformed Payload", "temporary failure", 5, time.Hour, []byte("{not json")) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       "api-item",
+		DestinationID: webhookURL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Malformed Payload",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       []byte("{not json"),
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -719,7 +788,17 @@ func TestProcessAPIRetryQueueReplaysPersistedAPIRetryAfterRestart(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewTracker(first) error = %v", err)
 	}
-	if !enqueueRetryForTest(t, firstTracker, key, "slack.ransomware", "slack", "api", api.DisplayRansomwareTitle(entry), "temporary failure", 5, time.Hour, payload) {
+	if !enqueueRetryForTest(t, firstTracker, status.RetryRequest{
+		ItemKey:       key,
+		DestinationID: "slack.ransomware",
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         api.DisplayRansomwareTitle(entry),
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("EnqueueRetryForDestination() unexpectedly failed")
 	}
 	if err := firstTracker.SavePendingChanges(); err != nil {
@@ -785,7 +864,17 @@ func enqueueAPIRetryPayloadForTest(t *testing.T, s *Scheduler, webhookURL string
 	if err != nil {
 		t.Fatalf("Marshal(entry) error = %v", err)
 	}
-	if !enqueueRetryForTest(t, s.statusTracker, api.GenerateEntryKey(entry), webhookURL, "slack", "api", "Example Corp", "temporary failure", 5, time.Hour, payload) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       api.GenerateEntryKey(entry),
+		DestinationID: webhookURL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Example Corp",
+		LastError:     "temporary failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	return entry

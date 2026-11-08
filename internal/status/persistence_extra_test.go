@@ -211,7 +211,16 @@ func TestLoadRetryStatusInitializesNullCollections(t *testing.T) {
 	if snapshot.RetryQueueItems != 0 || snapshot.DeadLetterItems != 0 {
 		t.Fatalf("retry snapshot = %+v, want empty collections", snapshot)
 	}
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() failed after loading null collections")
 	}
 }
@@ -894,14 +903,28 @@ func TestRSSRetentionTreatsDerivedMarkersLikeDeliveries(t *testing.T) {
 func TestSavePendingChangesPersistsAttemptBudgetDeadLetter(t *testing.T) {
 	tracker, dir := newTestTrackerWithDir(t)
 
-	if !tracker.enqueueRetryForTest(
-		"item-1", "discord.ransomware", "discord", "api", "Example", "boom", 1, time.Hour,
-	) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() did not queue the first failure, want one retry after the first send")
 	}
-	if tracker.enqueueRetryForTest(
-		"item-1", "discord.ransomware", "discord", "api", "Example", "boom", 1, time.Hour,
-	) {
+	if tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   1,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() queued the second failure, want it dead-lettered with retry_max_attempts=1")
 	}
 	if !tracker.DirtyState().Retry {

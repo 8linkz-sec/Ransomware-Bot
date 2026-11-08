@@ -618,17 +618,16 @@ func (s *Scheduler) sendAPIEntriesIndividually(ctx context.Context, entries []mo
 				"has_victim":     entry.Victim != "",
 			})).Error("Failed to send ransomware entry to webhook")
 			entryJSON, _ := json.Marshal(entry)
-			s.recordWebhookDeliveryFailure(
-				key,
-				target.destinationID,
-				target.messenger,
-				status.RetryItemTypeAPI.String(),
-				title,
-				err,
-				cfg.RetryMaxAttempts,
-				cfg.RetryWindow,
-				entryJSON,
-			)
+			s.recordWebhookDeliveryFailure(status.RetryRequest{
+				ItemKey:       key,
+				DestinationID: target.destinationID,
+				Messenger:     status.Messenger(target.messenger),
+				ItemType:      status.RetryItemType(status.RetryItemTypeAPI.String()),
+				Title:         title,
+				MaxAttempts:   cfg.RetryMaxAttempts,
+				RetryWindow:   cfg.RetryWindow,
+				Payload:       entryJSON,
+			}, err)
 		} else {
 			markAPIItemSentForDestination(s.statusTracker, key, title, target.destinationID, target.url)
 			s.recordAPIDeliveryAuditEvent(

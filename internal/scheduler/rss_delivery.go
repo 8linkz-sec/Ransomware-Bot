@@ -25,17 +25,22 @@ func (s *Scheduler) isRSSItemSentToWebhook(keys []string, destinationID, webhook
 	return false
 }
 
+type rssDeliveryContext struct {
+	mode          rssDeliveryMode
+	index         int
+	total         int
+	markAttempted func(itemKey, destinationID string)
+}
+
 func (s *Scheduler) sendRSSEntryToTarget(
 	ctx context.Context,
 	cfg *config.Config,
 	feedType string,
 	target webhookTarget,
 	item rssDeliveryItem,
-	mode rssDeliveryMode,
-	index int,
-	total int,
-	markAttempted func(itemKey, destinationID string),
+	deliveryContext rssDeliveryContext,
 ) rssDeliveryOutcome {
+	mode := deliveryContext.mode
 	destinationID := targetDestinationID(target)
 	messenger := target.messenger
 
@@ -156,8 +161,8 @@ func (s *Scheduler) sendRSSEntryToTarget(
 		return rssDeliveryOutcomeSent
 	}
 
-	if markAttempted != nil {
-		markAttempted(item.key, destinationID)
+	if deliveryContext.markAttempted != nil {
+		deliveryContext.markAttempted(item.key, destinationID)
 	}
 	delivery, ok := s.messengerDeliveryForConfig(messenger, cfg)
 	if !ok || delivery.sender == nil {
@@ -174,7 +179,7 @@ func (s *Scheduler) sendRSSEntryToTarget(
 		return rssDeliveryOutcomeCanceled
 	}
 
-	progressFields := webhookProgressFields(index, total, destinationID)
+	progressFields := webhookProgressFields(deliveryContext.index, deliveryContext.total, destinationID)
 	log.WithFields(progressFields).Info(rssDeliveryProgressMessage(mode))
 	err := s.sendWithWebhookLock(ctx, messenger, target.url, func() error {
 		return delivery.sender.SendRSSEntry(ctx, target.url, item.entry, feedType, config.NotificationFormatOptions(&cfg.Format))
@@ -187,16 +192,15 @@ func (s *Scheduler) sendRSSEntryToTarget(
 			"feed_url":       textutil.RedactURLCredentials(item.feedURL),
 			"messenger":      messenger,
 		})).Error("Failed to send RSS entry to webhook")
-		s.recordWebhookDeliveryFailure(
-			item.key,
-			destinationID,
-			messenger,
-			status.RetryItemTypeRSS.String(),
-			item.title,
-			err,
-			cfg.RetryMaxAttempts,
-			cfg.RetryWindow,
-		)
+		s.recordWebhookDeliveryFailure(status.RetryRequest{
+			ItemKey:       item.key,
+			DestinationID: destinationID,
+			Messenger:     status.Messenger(messenger),
+			ItemType:      status.RetryItemType(status.RetryItemTypeRSS.String()),
+			Title:         item.title,
+			MaxAttempts:   cfg.RetryMaxAttempts,
+			RetryWindow:   cfg.RetryWindow,
+		}, err)
 		return rssDeliveryOutcomeFailed
 	}
 
@@ -402,11 +406,12 @@ func (s *Scheduler) sendParsedRSSToWebhooksWithConfig(
 					cfg,
 					feedType,
 					target,
-					freshRSSDeliveryItem(entry),
-					rssDeliveryModeFresh,
-					i,
-					len(entriesForTarget),
-					markAttemptedEntry,
+					freshRSSDeliveryItem(entry), rssDeliveryContext{
+						mode:          rssDeliveryModeFresh,
+						index:         i,
+						total:         len(entriesForTarget),
+						markAttempted: markAttemptedEntry,
+					},
 				) {
 				case rssDeliveryOutcomeSent:
 					successCount++
@@ -813,11 +818,12 @@ func (s *Scheduler) sendRSSItemsToWebhookWithConfig(
 			cfg,
 			feedType,
 			target,
-			recoveryRSSDeliveryItem(storedItem, rssEntry),
-			rssDeliveryModeRecovery,
-			i,
-			len(items),
-			nil,
+			recoveryRSSDeliveryItem(storedItem, rssEntry), rssDeliveryContext{
+				mode:          rssDeliveryModeRecovery,
+				index:         i,
+				total:         len(items),
+				markAttempted: nil,
+			},
 		) {
 		case rssDeliveryOutcomeSent:
 			successCount++

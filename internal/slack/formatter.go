@@ -724,9 +724,9 @@ func slackNaturalText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateText(escaped, maxLength)
+		return truncateSlackEntitySafeText(escaped, maxLength)
 	}
-	return textutil.BidiIsolate(textutil.TruncateText(escaped, maxLength-2))
+	return textutil.BidiIsolate(truncateSlackEntitySafeText(escaped, maxLength-2))
 }
 
 func slackDescriptionText(value string, maxLength int) string {
@@ -735,9 +735,9 @@ func slackDescriptionText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateDescription(escaped, maxLength)
+		return truncateSlackEntitySafeDescription(escaped, maxLength)
 	}
-	return textutil.BidiIsolate(textutil.TruncateDescription(escaped, maxLength-2))
+	return textutil.BidiIsolate(truncateSlackEntitySafeDescription(escaped, maxLength-2))
 }
 
 func slackURLText(value string, maxLength int) string {
@@ -746,9 +746,80 @@ func slackURLText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateMiddle(escaped, maxLength)
+		return truncateSlackEntitySafeMiddle(escaped, maxLength)
 	}
-	return textutil.BidiIsolateLTR(textutil.TruncateMiddle(escaped, maxLength-2))
+	return textutil.BidiIsolateLTR(truncateSlackEntitySafeMiddle(escaped, maxLength-2))
+}
+
+const (
+	slackTextTruncationMarker        = "..."
+	slackDescriptionTruncationMarker = "... [truncated]"
+)
+
+// Slack treats &amp;, &lt;, and &gt; as single escaped characters. Trim only a
+// fragment left by a truncation boundary; complete entities and ordinary text
+// retain the existing truncation output.
+func trimPartialSlackEntityAtEnd(text string) string {
+	lastAmpersand := strings.LastIndexByte(text, '&')
+	if lastAmpersand < 0 {
+		return text
+	}
+	fragment := text[lastAmpersand:]
+	for _, entity := range []string{"&amp;", "&lt;", "&gt;"} {
+		if len(fragment) < len(entity) && strings.HasPrefix(entity, fragment) {
+			return text[:lastAmpersand]
+		}
+	}
+	return text
+}
+
+func truncateSlackEntitySafeText(escaped string, maxLength int) string {
+	result := textutil.TruncateText(escaped, maxLength)
+	if !textutil.ExceedsRuneLimit(escaped, maxLength) {
+		return result
+	}
+	if maxLength <= len(slackTextTruncationMarker) {
+		return trimPartialSlackEntityAtEnd(result)
+	}
+	return trimPartialSlackEntityAtEnd(strings.TrimSuffix(result, slackTextTruncationMarker)) + slackTextTruncationMarker
+}
+
+func truncateSlackEntitySafeDescription(escaped string, maxLength int) string {
+	result := textutil.TruncateDescription(escaped, maxLength)
+	if !textutil.ExceedsRuneLimit(escaped, maxLength) {
+		return result
+	}
+	if maxLength <= len(slackDescriptionTruncationMarker) {
+		return trimPartialSlackEntityAtEnd(result)
+	}
+	return trimPartialSlackEntityAtEnd(strings.TrimSuffix(result, slackDescriptionTruncationMarker)) + slackDescriptionTruncationMarker
+}
+
+func truncateSlackEntitySafeMiddle(escaped string, maxLength int) string {
+	result := textutil.TruncateMiddle(escaped, maxLength)
+	if !textutil.ExceedsRuneLimit(escaped, maxLength) {
+		return result
+	}
+	if maxLength <= len(slackTextTruncationMarker) {
+		return trimPartialSlackEntityAtEnd(result)
+	}
+	remaining := maxLength - len(slackTextTruncationMarker)
+	headLength := remaining / 2
+	tailLength := remaining - headLength
+	head := trimPartialSlackEntityAtEnd(textutil.PrefixRunes(escaped, headLength))
+	tail := textutil.SuffixRunes(escaped, tailLength)
+	beforeTail := textutil.PrefixRunes(escaped, len([]rune(escaped))-tailLength)
+	lastAmpersand := strings.LastIndexByte(beforeTail, '&')
+	if lastAmpersand >= 0 {
+		fragment := beforeTail[lastAmpersand:]
+		for _, entity := range []string{"&amp;", "&lt;", "&gt;"} {
+			if len(fragment) < len(entity) && strings.HasPrefix(entity, fragment) && strings.HasPrefix(escaped[lastAmpersand:], entity) {
+				tail = tail[len(entity)-len(fragment):]
+				break
+			}
+		}
+	}
+	return head + slackTextTruncationMarker + tail
 }
 
 func escapeSlackMrkdwnText(value string) string {
@@ -769,7 +840,7 @@ func formatRSSMessage(entry model.RSSEntry, formatConfig *notifyfmt.FormatOption
 	blockView := notifyfmt.BuildRSSView(entry, rssViewOptions(formatConfig, slackRSSHeaderText(formatConfig, feedType), slackFieldTextLimit))
 	return slackMessage{
 		Text:   rssFallbackText(fallbackView, formatConfig, feedType),
-		Blocks: rssSlackBlocks(blockView, formatConfig, feedType),
+		Blocks: rssSlackBlocks(blockView, formatConfig),
 	}
 }
 
@@ -783,12 +854,12 @@ func rssViewOptions(formatConfig *notifyfmt.FormatOptions, titleFallback string,
 	}
 }
 
-func rssSlackBlocks(view notifyfmt.RSSView, formatConfig *notifyfmt.FormatOptions, feedType string) []slackBlock {
+func rssSlackBlocks(view notifyfmt.RSSView, formatConfig *notifyfmt.FormatOptions) []slackBlock {
 	options := rssSlackOptionsFromConfig(formatConfig)
 	fieldOrder := slackRSSFieldOrder(formatConfig)
 	fieldSet := rssFieldSet(fieldOrder)
 
-	return trimSlackBlocks(appendRSSSlackFields(nil, fieldOrder, fieldSet, view, formatConfig, feedType, options))
+	return trimSlackBlocks(appendRSSSlackFields(nil, fieldOrder, fieldSet, view, options))
 }
 
 func rssSlackOptionsFromConfig(formatConfig *notifyfmt.FormatOptions) rssSlackOptions {
@@ -807,8 +878,6 @@ func appendRSSSlackFields(
 	blocks []slackBlock, fieldOrder []string,
 	fieldSet map[string]bool,
 	view notifyfmt.RSSView,
-	formatConfig *notifyfmt.FormatOptions,
-	feedType string,
 	options rssSlackOptions,
 ) []slackBlock {
 	contextAdded := false
@@ -819,8 +888,6 @@ func appendRSSSlackFields(
 			fieldName,
 			fieldSet,
 			view,
-			formatConfig,
-			feedType,
 			options,
 			contextAdded,
 		)
@@ -832,8 +899,6 @@ func appendRSSSlackFieldByName(
 	blocks []slackBlock, fieldName string,
 	fieldSet map[string]bool,
 	view notifyfmt.RSSView,
-	formatConfig *notifyfmt.FormatOptions,
-	feedType string,
 	options rssSlackOptions,
 	contextAdded bool,
 ) ([]slackBlock, bool) {

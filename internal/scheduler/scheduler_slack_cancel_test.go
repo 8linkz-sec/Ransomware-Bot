@@ -85,17 +85,16 @@ func TestDiscordCancelledSendStaysQueued(t *testing.T) {
 
 	const itemKey = "id:discord-cancel-1"
 	const destinationID = "discord.ransomware"
-	s.recordWebhookDeliveryFailure(
-		itemKey,
-		destinationID,
-		"discord",
-		"api",
-		"Example Discord Cancel",
-		err,
-		s.config.RetryMaxAttempts,
-		s.config.RetryWindow,
-		[]byte(`{"content":"example"}`),
-	)
+	s.recordWebhookDeliveryFailure(status.RetryRequest{
+		ItemKey:       itemKey,
+		DestinationID: destinationID,
+		Messenger:     status.Messenger("discord"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Example Discord Cancel",
+		MaxAttempts:   s.config.RetryMaxAttempts,
+		RetryWindow:   s.config.RetryWindow,
+		Payload:       []byte(`{"content":"example"}`),
+	}, err)
 	// The direct call bypasses the send loop, which is what normally flushes.
 	s.persistStatus("discord_cancel_test")
 
@@ -195,7 +194,17 @@ func TestSlackCancelledRetryReplayStaysQueued(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal(entry) error = %v", err)
 	}
-	if !enqueueRetryForTest(t, s.statusTracker, key, server.URL, "slack", "api", "Example Replay", "first failure", 5, time.Hour, payload) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       key,
+		DestinationID: server.URL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("api"),
+		Title:         "Example Replay",
+		LastError:     "first failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+		Payload:       payload,
+	}) {
 		t.Fatal("initial EnqueueRetry() unexpectedly failed")
 	}
 

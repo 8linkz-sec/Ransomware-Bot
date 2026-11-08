@@ -68,7 +68,16 @@ func waitOrTimeout(done <-chan struct{}, timeout time.Duration) (fired bool) {
 func TestSavePendingChangesWaitsForInFlightAuditWrite(t *testing.T) {
 	tracker, dir := newTestTrackerWithDir(t)
 
-	if !tracker.enqueueRetryForTest("item-1", "discord.ransomware", "discord", "api", "Example", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() did not queue the item, want a queued retry to dead-letter")
 	}
 	queueKey := makeCompositeKey("item-1", "discord.ransomware")
@@ -142,10 +151,28 @@ func TestCleanupOldEntriesDoesNotBlockConcurrentReaderDuringStalledAuditWrite(t 
 		t.Fatalf("NewTrackerWithRetention() error = %v", err)
 	}
 
-	if !tracker.enqueueRetryForTest("item-old", "discord.ransomware", "discord", "api", "Old", "boom", 5, 24*time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-old",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Old",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   24 * time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() for item-old unexpectedly failed")
 	}
-	if !tracker.enqueueRetryForTest("item-new", "discord.ransomware2", "discord", "api", "New", "boom", 5, 24*time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-new",
+		DestinationID: "discord.ransomware2",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "New",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   24 * time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() for item-new unexpectedly failed")
 	}
 	oldTime := formatStatusTimestamp(statusNow().Add(-time.Hour))
@@ -196,10 +223,28 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "cleanupOldEntries",
 			setup: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest("old-1", "discord.a", "discord", "api", "Old", "boom", 5, 24*time.Hour) {
+				if !tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "old-1",
+					DestinationID: "discord.a",
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("api"),
+					Title:         "Old",
+					LastError:     "boom",
+					MaxAttempts:   5,
+					RetryWindow:   24 * time.Hour,
+				}) {
 					t.Fatal("setup EnqueueRetry() failed")
 				}
-				if !tracker.enqueueRetryForTest("new-1", "discord.b", "discord", "api", "New", "boom", 5, 24*time.Hour) {
+				if !tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "new-1",
+					DestinationID: "discord.b",
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("api"),
+					Title:         "New",
+					LastError:     "boom",
+					MaxAttempts:   5,
+					RetryWindow:   24 * time.Hour,
+				}) {
 					t.Fatal("setup EnqueueRetry() failed")
 				}
 				oldTime := formatStatusTimestamp(statusNow().Add(-time.Hour))
@@ -217,10 +262,28 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "cleanupOldRSSEntries",
 			setup: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest("old-2", "discord.a", "discord", "rss", "Old", "boom", 5, 24*time.Hour) {
+				if !tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "old-2",
+					DestinationID: "discord.a",
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("rss"),
+					Title:         "Old",
+					LastError:     "boom",
+					MaxAttempts:   5,
+					RetryWindow:   24 * time.Hour,
+				}) {
 					t.Fatal("setup EnqueueRetry() failed")
 				}
-				if !tracker.enqueueRetryForTest("new-2", "discord.b", "discord", "rss", "New", "boom", 5, 24*time.Hour) {
+				if !tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "new-2",
+					DestinationID: "discord.b",
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("rss"),
+					Title:         "New",
+					LastError:     "boom",
+					MaxAttempts:   5,
+					RetryWindow:   24 * time.Hour,
+				}) {
 					t.Fatal("setup EnqueueRetry() failed")
 				}
 				oldTime := formatStatusTimestamp(statusNow().Add(-time.Hour))
@@ -238,7 +301,16 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "EnqueueRetryForDestination",
 			call: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest("item-enqueue", "discord.c", "discord", "api", "Enqueue", "boom", 5, time.Hour) {
+				if !tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "item-enqueue",
+					DestinationID: "discord.c",
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("api"),
+					Title:         "Enqueue",
+					LastError:     "boom",
+					MaxAttempts:   5,
+					RetryWindow:   time.Hour,
+				}) {
 					t.Fatal("EnqueueRetry() unexpectedly failed")
 				}
 			},
@@ -248,7 +320,16 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "RecordRetryQueueFailureWithErrorInfo",
 			setup: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest("item-fail", "discord.d", "discord", "api", "Fail", "boom", 1, 0) {
+				if !tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "item-fail",
+					DestinationID: "discord.d",
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("api"),
+					Title:         "Fail",
+					LastError:     "boom",
+					MaxAttempts:   1,
+					RetryWindow:   0,
+				}) {
 					t.Fatal("setup EnqueueRetry() failed")
 				}
 			},
@@ -265,7 +346,16 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "DeadLetterRetryQueueEntryWithErrorInfo",
 			setup: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest("item-dl", "discord.e", "discord", "api", "DL", "boom", 5, time.Hour) {
+				if !tracker.enqueueRetryForTest(RetryRequest{
+					ItemKey:       "item-dl",
+					DestinationID: "discord.e",
+					Messenger:     Messenger("discord"),
+					ItemType:      RetryItemType("api"),
+					Title:         "DL",
+					LastError:     "boom",
+					MaxAttempts:   5,
+					RetryWindow:   time.Hour,
+				}) {
 					t.Fatal("setup EnqueueRetry() failed")
 				}
 			},
@@ -374,10 +464,28 @@ func TestFlushDeliveryAuditEventsPreservesBatchOrder(t *testing.T) {
 	tracker.apiStatus.SentItems[makeCompositeKey("new-api", "discord.a")] = webhookSentInfo{SentAt: statusNow()}
 	tracker.mutex.Unlock()
 
-	if !tracker.enqueueRetryForTest("old-batch", "discord.a", "discord", "api", "Old", "boom", 5, 24*time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "old-batch",
+		DestinationID: "discord.a",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Old",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   24 * time.Hour,
+	}) {
 		t.Fatal("setup EnqueueRetry() failed")
 	}
-	if !tracker.enqueueRetryForTest("new-batch", "discord.b", "discord", "api", "New", "boom", 5, 24*time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "new-batch",
+		DestinationID: "discord.b",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "New",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   24 * time.Hour,
+	}) {
 		t.Fatal("setup EnqueueRetry() failed")
 	}
 	oldTime := formatStatusTimestamp(statusNow().Add(-time.Hour))
@@ -431,7 +539,16 @@ func TestFlushDeliveryAuditEventsLogsAndContinuesOnWriteError(t *testing.T) {
 		t.Fatalf("Mkdir(audit blocker) error = %v", err)
 	}
 
-	if !tracker.enqueueRetryForTest("item-err", "discord.a", "discord", "api", "Err", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-err",
+		DestinationID: "discord.a",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Err",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -524,7 +641,16 @@ func TestInMemoryTrackerWritesNoAuditFileThroughRetryPaths(t *testing.T) {
 	t.Cleanup(func() { _ = os.Remove(stray) })
 
 	tracker := NewMemoryTracker()
-	if !tracker.enqueueRetryForTest("mem-1", "discord.a", "discord", "api", "M", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "mem-1",
+		DestinationID: "discord.a",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "M",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 	tracker.MarkRetryDeadLetterForDestinationWithErrorInfo("mem-2", "discord.a", "discord", "api", "M", "final", RetryErrorInfo{})
@@ -846,7 +972,16 @@ func TestEnqueueRetryForDestinationDoesNotOverReleaseAuditFlight(t *testing.T) {
 	defer hook.Reset()
 
 	tracker, _ := newTestTrackerWithDir(t)
-	if !tracker.enqueueRetryForTest("item-1", "discord.a", "discord", "api", "Item", "boom", 5, time.Hour) {
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.a",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Item",
+		LastError:     "boom",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
 
@@ -887,7 +1022,16 @@ func TestAuditWriteOffMutexConcurrency(t *testing.T) {
 			defer wg.Done()
 			itemKey := "race-item"
 			destinationID := fmt.Sprintf("discord.%02d", i)
-			if !tracker.enqueueRetryForTest(itemKey, destinationID, "discord", "api", "Race", "boom", 1, 0) {
+			if !tracker.enqueueRetryForTest(RetryRequest{
+				ItemKey:       itemKey,
+				DestinationID: destinationID,
+				Messenger:     Messenger("discord"),
+				ItemType:      RetryItemType("api"),
+				Title:         "Race",
+				LastError:     "boom",
+				MaxAttempts:   1,
+				RetryWindow:   0,
+			}) {
 				return
 			}
 			queueKey := makeCompositeKey(itemKey, destinationID)
@@ -971,7 +1115,16 @@ func TestAuditEntryPointPanicReleasesMutex(t *testing.T) {
 			tracker.CleanupOldEntriesForRSSDestinations([]string{"discord.rss"})
 		}},
 		{"EnqueueRetryForDestination", func(tracker *Tracker) {
-			tracker.enqueueRetryForTest("item-panic", "discord.a", "discord", "api", "Panic", "boom", 5, time.Hour)
+			tracker.enqueueRetryForTest(RetryRequest{
+				ItemKey:       "item-panic",
+				DestinationID: "discord.a",
+				Messenger:     Messenger("discord"),
+				ItemType:      RetryItemType("api"),
+				Title:         "Panic",
+				LastError:     "boom",
+				MaxAttempts:   5,
+				RetryWindow:   time.Hour,
+			})
 		}},
 		{"RecordRetryQueueFailureWithErrorInfo", func(tracker *Tracker) {
 			tracker.RecordRetryQueueFailureWithErrorInfo("missing-key", "boom", RetryErrorInfo{}, 1, 0)

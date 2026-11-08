@@ -4675,17 +4675,17 @@ func TestProcessAPIRetryQueueCapsAttemptsPerCycle(t *testing.T) {
 			t.Fatalf("Marshal(entry) error = %v", err)
 		}
 		key := api.GenerateEntryKey(entry)
-		if !enqueueRetryForTest(t, s.statusTracker,
-			key,
-			"slack.ransomware",
-			"slack",
-			"api",
-			api.DisplayRansomwareTitle(entry),
-			"previous failure",
-			s.config.RetryMaxAttempts,
-			s.config.RetryWindow,
-			payload,
-		) {
+		if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+			ItemKey:       key,
+			DestinationID: "slack.ransomware",
+			Messenger:     status.Messenger("slack"),
+			ItemType:      status.RetryItemType("api"),
+			Title:         api.DisplayRansomwareTitle(entry),
+			LastError:     "previous failure",
+			MaxAttempts:   s.config.RetryMaxAttempts,
+			RetryWindow:   s.config.RetryWindow,
+			Payload:       payload,
+		}) {
 			t.Fatalf("EnqueueRetryForDestination(%q) moved item to dead letter", key)
 		}
 	}
@@ -4796,16 +4796,17 @@ func enqueueAPIRetryPayloadForDestination(
 	}
 	if !enqueueRetryForTest(
 		t,
-		s.statusTracker,
-		api.GenerateEntryKey(entry),
-		destinationID,
-		messenger,
-		status.RetryItemTypeAPI.String(),
-		api.DisplayRansomwareTitle(entry),
-		"temporary failure",
-		5,
-		time.Hour,
-		payload,
+		s.statusTracker, status.RetryRequest{
+			ItemKey:       api.GenerateEntryKey(entry),
+			DestinationID: destinationID,
+			Messenger:     status.Messenger(messenger),
+			ItemType:      status.RetryItemType(status.RetryItemTypeAPI.String()),
+			Title:         api.DisplayRansomwareTitle(entry),
+			LastError:     "temporary failure",
+			MaxAttempts:   5,
+			RetryWindow:   time.Hour,
+			Payload:       payload,
+		},
 	) {
 		t.Fatal("EnqueueRetry() unexpectedly failed")
 	}
@@ -5852,7 +5853,16 @@ func TestSendRSSItemsToWebhook_FreshnessInRecovery(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if !enqueueRetryForTest(t, s.statusTracker, staleItem.Key, webhookURL, "discord", "rss", staleItem.Title, "old delivery failure", 5, time.Hour) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       staleItem.Key,
+		DestinationID: webhookURL,
+		Messenger:     status.Messenger("discord"),
+		ItemType:      status.RetryItemType("rss"),
+		Title:         staleItem.Title,
+		LastError:     "old delivery failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved stale item to dead letter")
 	}
 	s.sendRSSItemsToWebhook(ctx, unsentRSSItemsForTest(t, staleItem), webhookURL, "general", "discord", nil)
@@ -5909,7 +5919,16 @@ func TestSendRSSItemsToWebhook_FreshnessDeliversUndatedRecoveryItems(t *testing.
 		FeedTitle: "Test Feed",
 	}
 
-	if !enqueueRetryForTest(t, s.statusTracker, item.Key, server.URL, "slack", "rss", item.Title, "old delivery failure", 5, time.Hour) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       item.Key,
+		DestinationID: server.URL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("rss"),
+		Title:         item.Title,
+		LastError:     "old delivery failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved undated item to dead letter")
 	}
 	s.sendRSSItemsToWebhook(context.Background(), unsentRSSItemsForTest(t, item), server.URL, "general", "slack", nil)
@@ -5963,7 +5982,16 @@ func TestSendRSSItemsToWebhookClearsRetryWhenRecoveryItemFilteredOut(t *testing.
 	}))
 	defer server.Close()
 
-	if !enqueueRetryForTest(t, s.statusTracker, item.Key, server.URL, "slack", "rss", item.Title, "old delivery failure", 5, time.Hour) {
+	if !enqueueRetryForTest(t, s.statusTracker, status.RetryRequest{
+		ItemKey:       item.Key,
+		DestinationID: server.URL,
+		Messenger:     status.Messenger("slack"),
+		ItemType:      status.RetryItemType("rss"),
+		Title:         item.Title,
+		LastError:     "old delivery failure",
+		MaxAttempts:   5,
+		RetryWindow:   time.Hour,
+	}) {
 		t.Fatal("EnqueueRetry() unexpectedly moved filtered item to dead letter")
 	}
 
@@ -6337,15 +6365,16 @@ func TestSendUnsentRSSItemsStaleItemsDoNotConsumeCycleCap(t *testing.T) {
 			destinationID := rssDestinationIDForTarget(status.MessengerSlack, config.FeedTypeGeneral, "")
 			if !enqueueRetryForTest(
 				t,
-				s.statusTracker,
-				fresh.Key,
-				destinationID,
-				status.MessengerSlack.String(),
-				status.RetryItemTypeRSS.String(),
-				fresh.Title,
-				"previous webhook failure",
-				5,
-				time.Hour,
+				s.statusTracker, status.RetryRequest{
+					ItemKey:       fresh.Key,
+					DestinationID: destinationID,
+					Messenger:     status.Messenger(status.MessengerSlack.String()),
+					ItemType:      status.RetryItemType(status.RetryItemTypeRSS.String()),
+					Title:         fresh.Title,
+					LastError:     "previous webhook failure",
+					MaxAttempts:   5,
+					RetryWindow:   time.Hour,
+				},
 			) {
 				t.Fatal("EnqueueRetry() unexpectedly moved the fresh item to dead letter")
 			}
@@ -7075,11 +7104,7 @@ func TestSendRSSEntryToTargetDeliversUndatedItemWithMaxItemAge(t *testing.T) {
 		s.config,
 		config.FeedTypeGeneral,
 		target,
-		item,
-		rssDeliveryModeFresh,
-		0,
-		1,
-		nil,
+		item, rssDeliveryContext{mode: rssDeliveryModeFresh, index: 0, total: 1, markAttempted: nil},
 	)
 
 	if outcome != rssDeliveryOutcomeSent {
@@ -7125,14 +7150,24 @@ func TestRecordWebhookDeliveryFailureHonorsRetryBudget(t *testing.T) {
 	t.Run("one retry after the first send", func(t *testing.T) {
 		s := newTestScheduler(t)
 
-		s.recordWebhookDeliveryFailure(
-			"item-1", "discord.ransomware", "discord", "api", "Example",
-			newRetryableError(), 1, time.Hour,
-		)
-		s.recordWebhookDeliveryFailure(
-			"item-1", "discord.ransomware", "discord", "api", "Example",
-			newRetryableError(), 1, time.Hour,
-		)
+		s.recordWebhookDeliveryFailure(status.RetryRequest{
+			ItemKey:       "item-1",
+			DestinationID: "discord.ransomware",
+			Messenger:     status.Messenger("discord"),
+			ItemType:      status.RetryItemType("api"),
+			Title:         "Example",
+			MaxAttempts:   1,
+			RetryWindow:   time.Hour,
+		}, newRetryableError())
+		s.recordWebhookDeliveryFailure(status.RetryRequest{
+			ItemKey:       "item-1",
+			DestinationID: "discord.ransomware",
+			Messenger:     status.Messenger("discord"),
+			ItemType:      status.RetryItemType("api"),
+			Title:         "Example",
+			MaxAttempts:   1,
+			RetryWindow:   time.Hour,
+		}, newRetryableError())
 
 		snapshot := s.statusTracker.RetryStatusSnapshot()
 		if snapshot.RetryQueueItems != 0 {
@@ -7153,14 +7188,24 @@ func TestRecordWebhookDeliveryFailureHonorsRetryBudget(t *testing.T) {
 	t.Run("two retries keep the second failure queued", func(t *testing.T) {
 		s := newTestScheduler(t)
 
-		s.recordWebhookDeliveryFailure(
-			"item-1", "discord.ransomware", "discord", "api", "Example",
-			newRetryableError(), 2, time.Hour,
-		)
-		s.recordWebhookDeliveryFailure(
-			"item-1", "discord.ransomware", "discord", "api", "Example",
-			newRetryableError(), 2, time.Hour,
-		)
+		s.recordWebhookDeliveryFailure(status.RetryRequest{
+			ItemKey:       "item-1",
+			DestinationID: "discord.ransomware",
+			Messenger:     status.Messenger("discord"),
+			ItemType:      status.RetryItemType("api"),
+			Title:         "Example",
+			MaxAttempts:   2,
+			RetryWindow:   time.Hour,
+		}, newRetryableError())
+		s.recordWebhookDeliveryFailure(status.RetryRequest{
+			ItemKey:       "item-1",
+			DestinationID: "discord.ransomware",
+			Messenger:     status.Messenger("discord"),
+			ItemType:      status.RetryItemType("api"),
+			Title:         "Example",
+			MaxAttempts:   2,
+			RetryWindow:   time.Hour,
+		}, newRetryableError())
 
 		snapshot := s.statusTracker.RetryStatusSnapshot()
 		if snapshot.RetryQueueItems != 1 {
@@ -7731,7 +7776,12 @@ func TestSendRSSEntryToTargetGUIDItemKeyUnaffectedByNewlyParsedDate(t *testing.T
 	keyBefore := rss.GenerateEntryKeyForEntry(undated)
 	outcome := s.sendRSSEntryToTarget(
 		t.Context(), s.config, config.FeedTypeGeneral, target,
-		freshRSSDeliveryItem(undated), rssDeliveryModeFresh, 0, 1, nil,
+		freshRSSDeliveryItem(undated), rssDeliveryContext{
+			mode:          rssDeliveryModeFresh,
+			index:         0,
+			total:         1,
+			markAttempted: nil,
+		},
 	)
 	if outcome != rssDeliveryOutcomeSent {
 		t.Fatalf("first send outcome = %v, want sent", outcome)
@@ -7746,7 +7796,7 @@ func TestSendRSSEntryToTargetGUIDItemKeyUnaffectedByNewlyParsedDate(t *testing.T
 
 	outcome = s.sendRSSEntryToTarget(
 		t.Context(), s.config, config.FeedTypeGeneral, target,
-		freshRSSDeliveryItem(dated), rssDeliveryModeFresh, 0, 1, nil,
+		freshRSSDeliveryItem(dated), rssDeliveryContext{mode: rssDeliveryModeFresh, index: 0, total: 1, markAttempted: nil},
 	)
 	if outcome != rssDeliveryOutcomeAlreadySent {
 		t.Fatalf("second send outcome = %v, want alreadySent (GUID key must not resend)", outcome)
