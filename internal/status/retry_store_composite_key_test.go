@@ -73,20 +73,24 @@ func TestCompositeKeyDestinationSchemesNeverCollide(t *testing.T) {
 		for _, feedType := range feedTypes {
 			for _, suffix := range suffixes {
 				rssID := literalRSSDestinationID(messenger, feedType, suffix)
-				rssKey := makeCompositeKey(itemKey, rssID)
-
-				for apiID := range apiIDs {
-					if apiID == rssID {
-						t.Fatalf("RSS destination ID %q collides verbatim with an API destination ID", rssID)
-					}
-					apiKey := makeCompositeKey(itemKey, apiID)
-					if apiKey == rssKey {
-						t.Fatalf("makeCompositeKey(%q, %q) == makeCompositeKey(%q, %q): "+
-							"API destination %q and RSS destination %q produced the same composite key",
-							itemKey, apiID, itemKey, rssID, apiID, rssID)
-					}
-				}
+				assertCompositeKeysSeparateForRSSDestination(t, itemKey, apiIDs, rssID)
 			}
+		}
+	}
+}
+
+func assertCompositeKeysSeparateForRSSDestination(t *testing.T, itemKey string, apiIDs map[string]bool, rssID string) {
+	t.Helper()
+	rssKey := makeCompositeKey(itemKey, rssID)
+	for apiID := range apiIDs {
+		if apiID == rssID {
+			t.Fatalf("RSS destination ID %q collides verbatim with an API destination ID", rssID)
+		}
+		apiKey := makeCompositeKey(itemKey, apiID)
+		if apiKey == rssKey {
+			t.Fatalf("makeCompositeKey(%q, %q) == makeCompositeKey(%q, %q): "+
+				"API destination %q and RSS destination %q produced the same composite key",
+				itemKey, apiID, itemKey, rssID, apiID, rssID)
 		}
 	}
 }
