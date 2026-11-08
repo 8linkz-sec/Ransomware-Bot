@@ -562,7 +562,6 @@ func TestEnqueueRetryClonesPayloadInput(t *testing.T) {
 	}
 }
 
-//nolint:gocyclo // long sequential scenario asserting dead-letter transition and payload state; not a table split candidate
 func TestDeadLetterTransitionPreservesReplayPayload(t *testing.T) {
 	tracker, dir := newTestTrackerWithDir(t)
 
@@ -595,7 +594,13 @@ func TestDeadLetterTransitionPreservesReplayPayload(t *testing.T) {
 	}) {
 		t.Fatal("second EnqueueRetryForDestination() accepted item past max attempts")
 	}
+	assertDeadLetterPayloadState(t, tracker, payload)
+	assertPersistedDeadLetterPayload(t, tracker, dir)
+	assertReloadedDeadLetterPayload(t, dir, itemKey)
+}
 
+func assertDeadLetterPayloadState(t *testing.T, tracker *Tracker, payload []byte) {
+	t.Helper()
 	if items := tracker.GetRetryItemsByType("api"); len(items) != 0 {
 		t.Fatalf("retry queue length = %d, want 0 after dead letter", len(items))
 	}
@@ -610,7 +615,10 @@ func TestDeadLetterTransitionPreservesReplayPayload(t *testing.T) {
 	if dead.PayloadVersion != RetryPayloadVersionRansomwareEntryV1 {
 		t.Fatalf("dead letter payload version = %q, want %q", dead.PayloadVersion, RetryPayloadVersionRansomwareEntryV1)
 	}
+}
 
+func assertPersistedDeadLetterPayload(t *testing.T, tracker *Tracker, dir string) {
+	t.Helper()
 	if err := tracker.SavePendingChanges(); err != nil {
 		t.Fatalf("SavePendingChanges() error = %v", err)
 	}
@@ -621,7 +629,10 @@ func TestDeadLetterTransitionPreservesReplayPayload(t *testing.T) {
 	if !strings.Contains(string(data), `"payload":`) || !strings.Contains(string(data), `"payload_version": "ransomware_entry_v1"`) {
 		t.Fatalf("persisted dead letter is missing replay payload fields: %s", data)
 	}
+}
 
+func assertReloadedDeadLetterPayload(t *testing.T, dir, itemKey string) {
+	t.Helper()
 	reloaded, err := NewTracker(dir)
 	if err != nil {
 		t.Fatalf("NewTracker(reload) error = %v", err)
@@ -2592,15 +2603,7 @@ func TestSourceHealthErrorInfoPersistsAndClears(t *testing.T) {
 		Timeout:       &timeout,
 	})
 	apiStatus := tracker.APIStatusSnapshot()
-	if apiStatus.LastErrorCategory != "rate_limited" || apiStatus.LastStatusCode != 429 {
-		t.Fatalf("API source info = category %q status %d", apiStatus.LastErrorCategory, apiStatus.LastStatusCode)
-	}
-	if apiStatus.LastRetryable == nil || !*apiStatus.LastRetryable {
-		t.Fatalf("API LastRetryable = %v, want true", apiStatus.LastRetryable)
-	}
-	if apiStatus.LastTimeout == nil || *apiStatus.LastTimeout {
-		t.Fatalf("API LastTimeout = %v, want false", apiStatus.LastTimeout)
-	}
+	assertAPISourceErrorInfoSet(t, apiStatus)
 
 	retryable = false
 	timeout = true
@@ -2613,6 +2616,34 @@ func TestSourceHealthErrorInfoPersistsAndClears(t *testing.T) {
 	if !ok {
 		t.Fatal("GetRSSFeedInfo() missing feed source status")
 	}
+	assertFeedSourceErrorInfoSet(t, feedInfo)
+
+	tracker.UpdateAPIStatus(true, 1, "")
+	apiStatus = tracker.APIStatusSnapshot()
+	assertAPISourceErrorInfoCleared(t, apiStatus)
+	tracker.UpdateFeedStatus("https://feed.example/rss", true, 1, "")
+	feedInfo, ok = tracker.GetRSSFeedInfo("https://feed.example/rss")
+	if !ok {
+		t.Fatal("GetRSSFeedInfo() missing feed source status after success")
+	}
+	assertFeedSourceErrorInfoCleared(t, feedInfo)
+}
+
+func assertAPISourceErrorInfoSet(t *testing.T, apiStatus APIStatusSnapshot) {
+	t.Helper()
+	if apiStatus.LastErrorCategory != "rate_limited" || apiStatus.LastStatusCode != 429 {
+		t.Fatalf("API source info = category %q status %d", apiStatus.LastErrorCategory, apiStatus.LastStatusCode)
+	}
+	if apiStatus.LastRetryable == nil || !*apiStatus.LastRetryable {
+		t.Fatalf("API LastRetryable = %v, want true", apiStatus.LastRetryable)
+	}
+	if apiStatus.LastTimeout == nil || *apiStatus.LastTimeout {
+		t.Fatalf("API LastTimeout = %v, want false", apiStatus.LastTimeout)
+	}
+}
+
+func assertFeedSourceErrorInfoSet(t *testing.T, feedInfo FeedInfo) {
+	t.Helper()
 	if feedInfo.LastErrorCategory != "timeout" {
 		t.Fatalf("feed LastErrorCategory = %q, want timeout", feedInfo.LastErrorCategory)
 	}
@@ -2622,17 +2653,17 @@ func TestSourceHealthErrorInfoPersistsAndClears(t *testing.T) {
 	if feedInfo.LastTimeout == nil || !*feedInfo.LastTimeout {
 		t.Fatalf("feed LastTimeout = %v, want true", feedInfo.LastTimeout)
 	}
+}
 
-	tracker.UpdateAPIStatus(true, 1, "")
-	apiStatus = tracker.APIStatusSnapshot()
+func assertAPISourceErrorInfoCleared(t *testing.T, apiStatus APIStatusSnapshot) {
+	t.Helper()
 	if apiStatus.LastErrorCategory != "" || apiStatus.LastRetryable != nil || apiStatus.LastTimeout != nil {
 		t.Fatalf("API source error info was not cleared after success: %+v", apiStatus)
 	}
-	tracker.UpdateFeedStatus("https://feed.example/rss", true, 1, "")
-	feedInfo, ok = tracker.GetRSSFeedInfo("https://feed.example/rss")
-	if !ok {
-		t.Fatal("GetRSSFeedInfo() missing feed source status after success")
-	}
+}
+
+func assertFeedSourceErrorInfoCleared(t *testing.T, feedInfo FeedInfo) {
+	t.Helper()
 	if feedInfo.LastErrorCategory != "" || feedInfo.LastRetryable != nil || feedInfo.LastTimeout != nil {
 		t.Fatalf("feed source error info was not cleared after success: %+v", feedInfo)
 	}
