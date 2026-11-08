@@ -4,7 +4,7 @@
 
 ### Security
 
-- Slack-compatible webhook error responses no longer expose a configured token when the provider echoes a URL with a decoded path.
+- Slack-compatible webhook error responses no longer expose configured tokens when the provider echoes a decoded URL, a decoded query, or only the request path.
 - The container image is built with Go 1.27.3 on Alpine 3.24.3. This fixes HIGH vulnerabilities in the Go
   standard library (crypto/x509, crypto/tls, net/http) and in OpenSSL, musl and zlib of the old base images.
 

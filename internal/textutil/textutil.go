@@ -814,6 +814,7 @@ func RedactWebhookSecretsForURL(text, webhookURL string) string {
 
 func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string {
 	marker := parsed.Scheme + "://" + parsed.Host + redactedWebhookPath(parsed.Path)
+	pathMarker := redactedWebhookPath(parsed.Path)
 	// F5, P2 (found 2026-09-04, sixth round on this defect class): this
 	// SUCCESS branch trusted parsed.Host/parsed.Path unconditionally --
 	// the FAILURE branch's rawWebhookSchemeHost (F1, above) exists
@@ -839,7 +840,30 @@ func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string 
 			marker = rawScheme + "://" + rawHost + redactedPathMarker
 		}
 	}
-	redacted := replaceAnchoredURLAndTail(text, normalized, marker)
+	redacted := text
+	// Providers can echo a decoded query alongside either the escaped or
+	// decoded request path. Match the whole known URL before shorter prefixes:
+	// a decoded %20 or + otherwise ends the tail scan and exposes its suffix.
+	if parsed.RawQuery != "" {
+		if decodedQuery, err := url.QueryUnescape(parsed.RawQuery); err == nil && decodedQuery != parsed.RawQuery {
+			for _, path := range []string{parsed.EscapedPath(), parsed.Path} {
+				decodedURLString := parsed.Scheme + "://" + parsed.Host + path + "?" + decodedQuery
+				redacted = replaceAnchoredURLAndTail(redacted, decodedURLString, marker)
+				redacted = replaceQuotedForm(redacted, decodedURLString, marker)
+				if path != "" {
+					redacted = replaceAnchoredURLAndTail(redacted, path+"?"+decodedQuery, pathMarker)
+					redacted = replaceQuotedForm(redacted, path+"?"+decodedQuery, pathMarker)
+				}
+			}
+		}
+		for _, path := range []string{parsed.EscapedPath(), parsed.Path} {
+			if path != "" {
+				redacted = replaceAnchoredURLAndTail(redacted, path+"?"+parsed.RawQuery, pathMarker)
+				redacted = replaceQuotedForm(redacted, path+"?"+parsed.RawQuery, pathMarker)
+			}
+		}
+	}
+	redacted = replaceAnchoredURLAndTail(redacted, normalized, marker)
 	// Same %q-escaped-form pass the fallback's tier two runs below, and
 	// for the identical reason: text is normally (*url.Error).Error(),
 	// which renders with %q, so a normalized containing a backslash or
@@ -863,6 +887,15 @@ func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string 
 		decodedURLString := parsed.Scheme + "://" + parsed.Host + parsed.Path
 		redacted = replaceAnchoredURLAndTail(redacted, decodedURLString, marker)
 		redacted = replaceQuotedForm(redacted, decodedURLString, marker)
+	}
+	// Some providers echo only req.URL.Path, EscapedPath, or RequestURI.
+	// Keep the public path prefix while masking the exact configured tail.
+	for _, path := range []string{parsed.EscapedPath(), parsed.Path} {
+		if path != "" && path != "/" {
+			redacted = replaceAnchoredPathAndTail(redacted, path, pathMarker)
+			quoted := strconv.Quote(path)
+			redacted = replaceAnchoredPathAndTail(redacted, quoted[1:len(quoted)-1], pathMarker)
+		}
 	}
 	return RedactWebhookSecrets(redacted)
 }
@@ -1030,6 +1063,55 @@ func replaceAnchoredURLAndTail(text, anchor, marker string) string {
 		text = text[end:]
 	}
 	return out.String()
+}
+
+// replaceAnchoredPathAndTail matches a provider's path-only echo without
+// treating the same path inside an unrelated absolute URL as a standalone
+// echo. Full configured URL forms are handled before this pass.
+func replaceAnchoredPathAndTail(text, anchor, marker string) string {
+	if anchor == "" || !strings.Contains(text, anchor) {
+		return text
+	}
+	var out strings.Builder
+	out.Grow(len(text))
+	for len(text) > 0 {
+		start := strings.Index(text, anchor)
+		if start < 0 {
+			out.WriteString(text)
+			break
+		}
+		if start > 0 && !isPathEchoBoundary(text[start-1]) {
+			out.WriteString(text[:start+1])
+			text = text[start+1:]
+			continue
+		}
+		out.WriteString(text[:start])
+		end := start + len(anchor)
+		for end < len(text) && !isASCIISpaceByte(text[end]) {
+			end++
+		}
+		out.WriteString(marker)
+		if start > 0 && text[start-1] == '"' {
+			tail := text[start+len(anchor) : end]
+			if tail == `"` || tail == `":` {
+				out.WriteString(tail)
+			}
+		}
+		text = text[end:]
+	}
+	return out.String()
+}
+
+func isPathEchoBoundary(previous byte) bool {
+	if isASCIISpaceByte(previous) {
+		return true
+	}
+	switch previous {
+	case '"', '\'', '(', '[', '{', '=', ':', '>':
+		return true
+	default:
+		return false
+	}
 }
 
 // replaceQuotedForm additionally replaces anchor's strconv.Quote-escaped form
