@@ -280,6 +280,9 @@ func createRansomwareField(
 		return nil
 	}
 	value := strings.TrimSpace(sharedField.Value)
+	if canonicalFieldName == formatfields.FieldDescription {
+		value = textutil.StripHTML(value)
+	}
 	if value == "" {
 		if !formatConfig.ShowEmptyFields {
 			return nil
