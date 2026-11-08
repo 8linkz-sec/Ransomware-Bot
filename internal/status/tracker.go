@@ -1674,25 +1674,27 @@ func (t *Tracker) markAPIItemSentUnderKey(itemKey, markerDestination, ownerDesti
 
 	// A shared legacy alias records a single owner so a sibling destination
 	// sharing this webhook URL cannot adopt someone else's delivery
-	// (legacySentMarkerAppliesTo). When this write changes that owner, a
-	// second, distinct destination has genuinely delivered/decided this same
-	// item under the same shared URL -- a documented, supported config
-	// (readme.md "Two endpoints of the same webhook block may point at the
-	// same URL"). Refresh the superseded owner's OWN primary marker's SentAt
-	// so retention (cleanupOldAPISentItems, count-bounded, oldest-first) does
-	// not prune it merely because the alias kept getting rewritten by its
-	// sibling while the primary sat still. A no-op if that primary was
-	// already pruned; never touches the alias's own owner field.
+	// (legacySentMarkerAppliesTo). Keep an existing owner-stamped alias's
+	// original time on each owner-stamped alias rewrite: it is compatibility state,
+	// while each delivered destination has its own primary marker. Retention
+	// can then discard the alias before any of three or more primaries. An
+	// owner-less legacy aliases and primary markers retain fresh timestamps.
 	supersededOwner := ""
+	sentAt := statusNow()
 	if existing, exists := t.apiStatus.SentItems[compositeKey]; exists {
-		if oldOwner := strings.TrimSpace(existing.DestinationID); oldOwner != "" && oldOwner != newOwner {
-			supersededOwner = oldOwner
+		if oldOwner := strings.TrimSpace(existing.DestinationID); oldOwner != "" {
+			if newOwner != "" && markerDestination != ownerDestinationID {
+				sentAt = existing.SentAt
+			}
+			if oldOwner != newOwner {
+				supersededOwner = oldOwner
+			}
 		}
 	}
 
 	// Mark item as sent to this specific webhook
 	t.apiStatus.SentItems[compositeKey] = webhookSentInfo{
-		SentAt:        statusNow(),
+		SentAt:        sentAt,
 		DestinationID: newOwner,
 	}
 	t.indexAPISentItemLocked(compositeKey, t.apiStatus.SentItems[compositeKey])
@@ -2044,11 +2046,17 @@ func (t *Tracker) markRSSItemSentUnderKeyLocked(
 	newOwner := deliveryDestinationIDForPersistence(ownerDestinationID)
 
 	// See markAPIItemSentUnderKey's matching comment (tracker.go) -- same
-	// shared-alias overwrite, same fix, RSS twin of that one.
+	// shared-alias overwrite and retention ordering, RSS twin of that one.
 	supersededOwner := ""
+	sentAt := statusNow()
 	if existing, exists := t.rssStatus.SentItems[compositeKey]; exists {
-		if oldOwner := strings.TrimSpace(existing.DestinationID); oldOwner != "" && oldOwner != newOwner {
-			supersededOwner = oldOwner
+		if oldOwner := strings.TrimSpace(existing.DestinationID); oldOwner != "" {
+			if newOwner != "" && markerDestination != ownerDestinationID {
+				sentAt = existing.SentAt
+			}
+			if oldOwner != newOwner {
+				supersededOwner = oldOwner
+			}
 		}
 	}
 
@@ -2056,7 +2064,7 @@ func (t *Tracker) markRSSItemSentUnderKeyLocked(
 	t.rssStatus.SentItems[compositeKey] = rssWebhookSentInfo{
 		Title:         itemTitle,
 		FeedTitle:     feedTitle,
-		SentAt:        statusNow(),
+		SentAt:        sentAt,
 		DestinationID: newOwner,
 		ItemKey:       itemKey, // Store for reverse lookup
 		Skipped:       skipped,

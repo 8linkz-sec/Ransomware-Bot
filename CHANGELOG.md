@@ -9,6 +9,7 @@
 
 ### Improved
 
+- Shared webhook URLs with three or more destinations no longer replay older alerts when status retention trims sent markers.
 - Long Slack messages no longer show broken `&`, `<`, or `>` escapes when shortened.
 - HTML-derived alert text now removes embedded Unicode direction controls before formatting.
 
