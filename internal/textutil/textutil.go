@@ -817,51 +817,59 @@ func RedactWebhookSecretsForURL(text, webhookURL string) string {
 	}
 	parsed, err := url.Parse(normalized)
 	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
-		marker := parsed.Scheme + "://" + parsed.Host + redactedWebhookPath(parsed.Path)
-		// F5, P2 (found 2026-09-04, sixth round on this defect class): this
-		// SUCCESS branch trusted parsed.Host/parsed.Path unconditionally --
-		// the FAILURE branch's rawWebhookSchemeHost (F1, above) exists
-		// precisely because net/url's authority-truncation-at-first-'/' bug
-		// can hand back a userinfo credential AS the host, but that bug does
-		// not require url.Parse to fail: a userinfo shaped like
-		// "TOKEN/pathlike@realhost" with no ':' in it parses as a perfectly
-		// valid bare hostname ("TOKEN") with parsed.User == nil, so
-		// url.Parse SUCCEEDS -- there is no *url.Error here for tier two's
-		// raw/%q ReplaceAll passes to even run against, and the credential
-		// reaches the marker directly, unredacted, on every call (an
-		// ordinary, error-free success, not just a validation failure).
-		// realAuthorityCandidate reruns the identical last-'@'-wins raw scan
-		// on normalized and disagrees with parsed.Host exactly when this
-		// shape is present; trust its answer over parsed.Host/parsed.Path in
-		// that case. See realAuthorityCandidate's own doc comment for why
-		// the query/fragment are excluded from that scan (so an unrelated
-		// '@' in a query value, e.g. an email address, cannot false-positive
-		// this and downgrade an already-correct parsed.Host).
-		if rawScheme, rawHost, mismatched := realAuthorityCandidate(normalized, parsed); mismatched {
-			marker = redactedURLMarker
-			if isLogSafeHost(rawHost) {
-				marker = rawScheme + "://" + rawHost + redactedPathMarker
-			}
-		}
-		redacted := strings.ReplaceAll(text, normalized, marker)
-		// Same %q-escaped-form pass the fallback's tier two runs below, and
-		// for the identical reason: text is normally (*url.Error).Error(),
-		// which renders with %q, so a normalized containing a backslash or
-		// double quote survives into text as two printable characters (\\ or
-		// \") that the raw ReplaceAll above cannot match. See the doc
-		// comment above for why this branch needed its own pass (F3, found
-		// 2026-09-04, third instance of this defect class).
-		redacted = replaceQuotedForm(redacted, normalized, marker)
-		if parsed.RawPath != "" {
-			rawURL := *parsed
-			rawURL.RawQuery = ""
-			rawURL.Fragment = ""
-			rawURLString := rawURL.String()
-			redacted = strings.ReplaceAll(redacted, rawURLString, marker)
-			redacted = replaceQuotedForm(redacted, rawURLString, marker)
-		}
-		return RedactWebhookSecrets(redacted)
+		return redactParseableWebhookURL(text, normalized, parsed)
 	}
+	return redactUnparseableWebhookURL(text, normalized, err)
+}
+
+func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string {
+	marker := parsed.Scheme + "://" + parsed.Host + redactedWebhookPath(parsed.Path)
+	// F5, P2 (found 2026-09-04, sixth round on this defect class): this
+	// SUCCESS branch trusted parsed.Host/parsed.Path unconditionally --
+	// the FAILURE branch's rawWebhookSchemeHost (F1, above) exists
+	// precisely because net/url's authority-truncation-at-first-'/' bug
+	// can hand back a userinfo credential AS the host, but that bug does
+	// not require url.Parse to fail: a userinfo shaped like
+	// "TOKEN/pathlike@realhost" with no ':' in it parses as a perfectly
+	// valid bare hostname ("TOKEN") with parsed.User == nil, so
+	// url.Parse SUCCEEDS -- there is no *url.Error here for tier two's
+	// raw/%q ReplaceAll passes to even run against, and the credential
+	// reaches the marker directly, unredacted, on every call (an
+	// ordinary, error-free success, not just a validation failure).
+	// realAuthorityCandidate reruns the identical last-'@'-wins raw scan
+	// on normalized and disagrees with parsed.Host exactly when this
+	// shape is present; trust its answer over parsed.Host/parsed.Path in
+	// that case. See realAuthorityCandidate's own doc comment for why
+	// the query/fragment are excluded from that scan (so an unrelated
+	// '@' in a query value, e.g. an email address, cannot false-positive
+	// this and downgrade an already-correct parsed.Host).
+	if rawScheme, rawHost, mismatched := realAuthorityCandidate(normalized, parsed); mismatched {
+		marker = redactedURLMarker
+		if isLogSafeHost(rawHost) {
+			marker = rawScheme + "://" + rawHost + redactedPathMarker
+		}
+	}
+	redacted := strings.ReplaceAll(text, normalized, marker)
+	// Same %q-escaped-form pass the fallback's tier two runs below, and
+	// for the identical reason: text is normally (*url.Error).Error(),
+	// which renders with %q, so a normalized containing a backslash or
+	// double quote survives into text as two printable characters (\\ or
+	// \") that the raw ReplaceAll above cannot match. See the doc
+	// comment above for why this branch needed its own pass (F3, found
+	// 2026-09-04, third instance of this defect class).
+	redacted = replaceQuotedForm(redacted, normalized, marker)
+	if parsed.RawPath != "" {
+		rawURL := *parsed
+		rawURL.RawQuery = ""
+		rawURL.Fragment = ""
+		rawURLString := rawURL.String()
+		redacted = strings.ReplaceAll(redacted, rawURLString, marker)
+		redacted = replaceQuotedForm(redacted, rawURLString, marker)
+	}
+	return RedactWebhookSecrets(redacted)
+}
+
+func redactUnparseableWebhookURL(text, normalized string, err error) string {
 	// url.Parse could not make sense of this exact string -- callers only
 	// reach this branch redacting the *url.Error text produced when
 	// url.Parse(webhookURL) itself failed, so a second url.Parse call on the
@@ -1202,6 +1210,10 @@ func redactURLErrorSubstringFragments(text string, err error, secret string) str
 		int64(len(secret))*int64(len(detail))*int64(len(detail)) > maxFragmentWorkUnits {
 		return strings.ReplaceAll(text, detail, redactedValueMarker)
 	}
+	return redactQuotedSecretFragments(text, detail, secret)
+}
+
+func redactQuotedSecretFragments(text, detail, secret string) string {
 	for start := 0; start < len(secret); start++ {
 		maxEnd := len(secret)
 		if start+len(detail) < maxEnd {
@@ -1536,69 +1548,77 @@ func RedactURLCredentials(text string) string {
 	if text == "" {
 		return ""
 	}
-	return redactURLMatches(text, genericHTTPURLRegex, func(match string) string {
-		parsed, err := url.Parse(match)
-		if err != nil || parsed.Host == "" {
-			return redactUnparsableURLMatch(match)
+	return redactURLMatches(text, genericHTTPURLRegex, redactURLCredentialMatch)
+}
+
+func redactURLCredentialMatch(match string) string {
+	parsed, err := url.Parse(match)
+	if err != nil || parsed.Host == "" {
+		return redactUnparsableURLMatch(match)
+	}
+	// F5, P2 (found 2026-09-04, sixth round on this defect class): this
+	// function's own instance of the identical blind spot
+	// RedactWebhookSecretsForURL's success branch had -- see
+	// realAuthorityCandidate's doc comment. Unlike that function,
+	// RedactURLCredentials has no known-good anchor URL and no fallback
+	// of any kind on top of what url.Parse reports, so when net/url's
+	// authority-truncation bug hands back the credential as parsed.Host
+	// with parsed.User == nil, there is nothing else in this function
+	// that would ever redact it: parsed.User is nil (nothing to mask)
+	// and the credential is not a recognised sensitive query key either.
+	// This is the call site every RSS/status/API log line that names a
+	// feed or webhook URL goes through with no other anchor available
+	// (internal/rss, internal/scheduler, internal/status,
+	// internal/discord, internal/slack), so it reaches bot.log on
+	// ordinary, successful operation -- not only on a validation
+	// failure.
+	if rawScheme, rawHost, mismatched := realAuthorityCandidate(match, parsed); mismatched {
+		if isLogSafeHost(rawHost) {
+			return rawScheme + "://" + rawHost + redactedPathMarker
 		}
-		// F5, P2 (found 2026-09-04, sixth round on this defect class): this
-		// function's own instance of the identical blind spot
-		// RedactWebhookSecretsForURL's success branch had -- see
-		// realAuthorityCandidate's doc comment. Unlike that function,
-		// RedactURLCredentials has no known-good anchor URL and no fallback
-		// of any kind on top of what url.Parse reports, so when net/url's
-		// authority-truncation bug hands back the credential as parsed.Host
-		// with parsed.User == nil, there is nothing else in this function
-		// that would ever redact it: parsed.User is nil (nothing to mask)
-		// and the credential is not a recognised sensitive query key either.
-		// This is the call site every RSS/status/API log line that names a
-		// feed or webhook URL goes through with no other anchor available
-		// (internal/rss, internal/scheduler, internal/status,
-		// internal/discord, internal/slack), so it reaches bot.log on
-		// ordinary, successful operation -- not only on a validation
-		// failure.
-		if rawScheme, rawHost, mismatched := realAuthorityCandidate(match, parsed); mismatched {
-			if isLogSafeHost(rawHost) {
-				return rawScheme + "://" + rawHost + redactedPathMarker
-			}
-			return redactedURLMarker
+		return redactedURLMarker
+	}
+	changed := false
+	if parsed.User != nil {
+		parsed.User = url.User(redactedValueMarker)
+		changed = true
+	}
+	if redactParsedURLQuery(parsed) {
+		changed = true
+	}
+	if !changed {
+		return match
+	}
+	return parsed.String()
+}
+
+func redactParsedURLQuery(parsed *url.URL) bool {
+	query, queryErr := url.ParseQuery(parsed.RawQuery)
+	if queryErr != nil {
+		// ParseQuery drops segments it cannot read (";" separators, bad
+		// escapes); rewriting the raw query preserves those segments.
+		if redacted, ok := redactRawQuery(parsed.RawQuery); ok {
+			parsed.RawQuery = redacted
+			return true
 		}
-		changed := false
-		if parsed.User != nil {
-			parsed.User = url.User(redactedValueMarker)
-			changed = true
+		return false
+	}
+	changed := false
+	for key, values := range query {
+		if !feedurl.IsSensitiveQueryKey(key) {
+			continue
 		}
-		query, queryErr := url.ParseQuery(parsed.RawQuery)
-		if queryErr != nil {
-			// ParseQuery dropped segments it could not read (";" separators, bad
-			// escapes); re-encoding its partial result would delete them, so
-			// rewrite the raw query instead.
-			if redacted, ok := redactRawQuery(parsed.RawQuery); ok {
-				parsed.RawQuery = redacted
-				changed = true
-			}
-			if !changed {
-				return match
-			}
-			return parsed.String()
+		redactedValues := make([]string, len(values))
+		for i := range redactedValues {
+			redactedValues[i] = redactedValueMarker
 		}
-		for key, values := range query {
-			if !feedurl.IsSensitiveQueryKey(key) {
-				continue
-			}
-			redactedValues := make([]string, len(values))
-			for i := range redactedValues {
-				redactedValues[i] = redactedValueMarker
-			}
-			query[key] = redactedValues
-			changed = true
-		}
-		if !changed {
-			return match
-		}
+		query[key] = redactedValues
+		changed = true
+	}
+	if changed {
 		parsed.RawQuery = query.Encode()
-		return parsed.String()
-	})
+	}
+	return changed
 }
 
 // redactURLMatches applies redact to every non-overlapping match of re in

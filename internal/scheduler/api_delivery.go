@@ -464,7 +464,11 @@ func roundRobinAPIRetryRecords(records []status.QueuedRetryRecord, legacyMesseng
 		return destOrder[i] < destOrder[j]
 	})
 
-	ordered := make([]status.QueuedRetryRecord, 0, len(records))
+	return interleaveAPIRetryGroups(groups, destOrder, len(records))
+}
+
+func interleaveAPIRetryGroups(groups map[string][]status.QueuedRetryRecord, destOrder []string, total int) []status.QueuedRetryRecord {
+	ordered := make([]status.QueuedRetryRecord, 0, total)
 	for round := 0; ; round++ {
 		progressed := false
 		for _, dest := range destOrder {
@@ -594,51 +598,7 @@ func (s *Scheduler) sendAPIEntriesIndividually(ctx context.Context, entries []mo
 		key := model.GenerateRansomwareEntryKey(entry)
 		title := model.DisplayRansomwareTitle(entry)
 		log.WithFields(webhookProgressFields(i, len(entries), target.destinationID)).Info("Sending API item to webhook")
-		if target.send == nil {
-			log.WithFields(log.Fields{
-				"destination_id": target.destinationID,
-				"messenger":      target.messenger,
-				"group":          entry.Group,
-				"item_key":       key,
-				"item_type":      status.RetryItemTypeAPI.String(),
-				"entry_id":       entry.ID,
-				"has_victim":     entry.Victim != "",
-			}).Error("Missing API webhook sender")
-			continue
-		}
-		if err := s.sendWithWebhookLock(ctx, target.messenger, target.url, func() error {
-			return target.send(ctx, target.url, entry, config.NotificationFormatOptions(&cfg.Format))
-		}); err != nil {
-			log.WithFields(webhookFailureFields(target.messenger, err, log.Fields{
-				"destination_id": target.destinationID,
-				"group":          entry.Group,
-				"item_key":       key,
-				"item_type":      status.RetryItemTypeAPI.String(),
-				"entry_id":       entry.ID,
-				"has_victim":     entry.Victim != "",
-			})).Error("Failed to send ransomware entry to webhook")
-			entryJSON, _ := json.Marshal(entry)
-			s.recordWebhookDeliveryFailure(status.RetryRequest{
-				ItemKey:       key,
-				DestinationID: target.destinationID,
-				Messenger:     status.Messenger(target.messenger),
-				ItemType:      status.RetryItemType(status.RetryItemTypeAPI.String()),
-				Title:         title,
-				MaxAttempts:   cfg.RetryMaxAttempts,
-				RetryWindow:   cfg.RetryWindow,
-				Payload:       entryJSON,
-			}, err)
-		} else {
-			markAPIItemSentForDestination(s.statusTracker, key, title, target.destinationID, target.url)
-			s.recordAPIDeliveryAuditEvent(
-				entry,
-				target,
-				status.DeliveryAuditOutcomeDelivered,
-				"",
-				nil,
-			)
-			s.statusTracker.RemoveFromRetryQueueByDestination(key, target.destinationID, target.url)
-			s.persistStatus("api item delivered")
+		if s.sendAPIEntryToTarget(ctx, cfg, entry, target, key, title) {
 			successCount++
 		}
 	}
@@ -656,6 +616,50 @@ func (s *Scheduler) sendAPIEntriesIndividually(ctx context.Context, entries []mo
 	if !s.dryRun {
 		s.persistStatus("api individual delivery")
 	}
+}
+
+func (s *Scheduler) sendAPIEntryToTarget(ctx context.Context, cfg *config.Config, entry model.RansomwareEntry, target apiDeliveryTarget, key, title string) bool {
+	if target.send == nil {
+		log.WithFields(log.Fields{
+			"destination_id": target.destinationID,
+			"messenger":      target.messenger,
+			"group":          entry.Group,
+			"item_key":       key,
+			"item_type":      status.RetryItemTypeAPI.String(),
+			"entry_id":       entry.ID,
+			"has_victim":     entry.Victim != "",
+		}).Error("Missing API webhook sender")
+		return false
+	}
+	if err := s.sendWithWebhookLock(ctx, target.messenger, target.url, func() error {
+		return target.send(ctx, target.url, entry, config.NotificationFormatOptions(&cfg.Format))
+	}); err != nil {
+		log.WithFields(webhookFailureFields(target.messenger, err, log.Fields{
+			"destination_id": target.destinationID,
+			"group":          entry.Group,
+			"item_key":       key,
+			"item_type":      status.RetryItemTypeAPI.String(),
+			"entry_id":       entry.ID,
+			"has_victim":     entry.Victim != "",
+		})).Error("Failed to send ransomware entry to webhook")
+		entryJSON, _ := json.Marshal(entry)
+		s.recordWebhookDeliveryFailure(status.RetryRequest{
+			ItemKey:       key,
+			DestinationID: target.destinationID,
+			Messenger:     status.Messenger(target.messenger),
+			ItemType:      status.RetryItemType(status.RetryItemTypeAPI.String()),
+			Title:         title,
+			MaxAttempts:   cfg.RetryMaxAttempts,
+			RetryWindow:   cfg.RetryWindow,
+			Payload:       entryJSON,
+		}, err)
+		return false
+	}
+	markAPIItemSentForDestination(s.statusTracker, key, title, target.destinationID, target.url)
+	s.recordAPIDeliveryAuditEvent(entry, target, status.DeliveryAuditOutcomeDelivered, "", nil)
+	s.statusTracker.RemoveFromRetryQueueByDestination(key, target.destinationID, target.url)
+	s.persistStatus("api item delivered")
+	return true
 }
 
 // sendAPIEntriesIndividuallyToDiscord sends API entries to Discord one at a time with rate limiting.
@@ -822,6 +826,12 @@ func (s *Scheduler) processAPIRetryQueue(ctx context.Context, allEntries []model
 	attemptLimit := cfg.APIMaxEntriesPerCycle
 	attemptedSends := 0
 	retryGroups := make(map[string][]apiRetryJob)
+	preparation := apiRetryPreparation{
+		entryMap:                   entryMap,
+		webhooks:                   messengerWebhooks,
+		legacyMessengerDestination: legacyMessengerDestination,
+		markChanged:                markChanged,
+	}
 	for _, retryRecord := range retryRecords {
 		item := retryRecord.Item
 		select {
@@ -830,102 +840,10 @@ func (s *Scheduler) processAPIRetryQueue(ctx context.Context, allEntries []model
 			return
 		default:
 		}
-
-		routeID, destinationID := apiRetryRoute(item, legacyMessengerDestination)
-		wh, ok := messengerWebhooks[routeID]
-		if !ok {
-			fields := apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "unknown_destination")
-			fields["route_id"] = routeID
-			log.WithFields(fields).Warn("Skipping API retry item with unknown destination")
+		job, ready := s.prepareAPIRetryJob(retryRecord, preparation)
+		if !ready {
 			continue
 		}
-		if !wh.enabled {
-			log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "destination_disabled")).Warn("Skipping API retry item because destination is disabled")
-			continue
-		}
-		if wh.url == "" {
-			log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "destination_missing_url")).Warn("Skipping API retry item because destination URL is missing")
-			continue
-		}
-		if wh.quietHoursActive {
-			fields := apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "quiet_hours")
-			if wh.quietHours != nil {
-				fields["quiet_hours_start"] = wh.quietHours.Start
-				fields["quiet_hours_end"] = wh.quietHours.End
-			}
-			log.WithFields(fields).Info("Deferring API retry item because quiet hours are active")
-			details := map[string]string{"queue_key": retryRecord.QueueKey}
-			if wh.quietHours != nil {
-				details["quiet_hours_start"] = wh.quietHours.Start
-				details["quiet_hours_end"] = wh.quietHours.End
-			}
-			s.recordAPIRetryAuditEvent(
-				item,
-				destinationID,
-				status.DeliveryAuditOutcomeQuietHours,
-				status.DeliveryAuditReasonQuietHours,
-				details,
-			)
-			continue
-		}
-
-		// If already sent (e.g. by the normal send loop this cycle), just clean up
-		if s.statusTracker.IsAPIItemSentToDestination(item.ItemKey, destinationID, wh.url) {
-			log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "already_sent")).Info("Removing API retry item already marked sent")
-			s.statusTracker.RemoveRetryQueueEntry(retryRecord.QueueKey)
-			markChanged()
-			continue
-		}
-
-		// If entry is still in API window, the normal send loop handles it — skip
-		if entry, inWindow := entryMap[item.ItemKey]; inWindow {
-			if !filter.MatchesAPIEntry(wh.filters, entry) {
-				log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "filtered_in_window")).Info("In-window API retry item filtered out by current webhook rules, keeping queued")
-				s.recordAPIRetryAuditEvent(
-					item,
-					destinationID,
-					status.DeliveryAuditOutcomeFiltered,
-					status.DeliveryAuditReasonFilterMismatch,
-					map[string]string{
-						"queue_key":   retryRecord.QueueKey,
-						"retry_scope": "in_api_window",
-					},
-				)
-			} else {
-				log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "in_api_window")).Info("Skipping API retry item still present in current API response")
-			}
-			continue
-		}
-
-		entry, deadLetterReason, err := retryEntryFromPayload(item)
-		if err != nil {
-			fields := apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "invalid_payload")
-			if item.PayloadVersion != "" {
-				fields["payload_version"] = item.PayloadVersion
-			}
-			log.WithError(err).WithFields(fields).Error("Failed to reconstruct API retry item from payload")
-			s.deadLetterMalformedAPIRetryItem(retryRecord.QueueKey, deadLetterReason)
-			markChanged()
-			continue
-		}
-
-		// Re-check filter (config may have changed since first attempt)
-		if !filter.MatchesAPIEntry(wh.filters, entry) {
-			log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "filtered_reconstructed")).Info("API retry item filtered out by current webhook rules, keeping queued")
-			s.recordAPIRetryAuditEvent(
-				item,
-				destinationID,
-				status.DeliveryAuditOutcomeFiltered,
-				status.DeliveryAuditReasonFilterMismatch,
-				map[string]string{
-					"queue_key":   retryRecord.QueueKey,
-					"retry_scope": "reconstructed_payload",
-				},
-			)
-			continue
-		}
-
-		// Attempt re-send
 		if attemptLimit > 0 && attemptedSends >= attemptLimit {
 			log.WithFields(log.Fields{
 				"cycle_limit":       attemptLimit,
@@ -935,23 +853,112 @@ func (s *Scheduler) processAPIRetryQueue(ctx context.Context, allEntries []model
 			break
 		}
 		attemptedSends++
-		primaryKey := model.GenerateRansomwareEntryKey(entry)
-		groupKey := item.Messenger + "\x00" + destinationID + "\x00" + wh.url
-		retryGroups[groupKey] = append(retryGroups[groupKey], apiRetryJob{
-			item:          item,
-			queueKey:      retryRecord.QueueKey,
-			destinationID: destinationID,
-			webhook:       wh,
-			entry:         entry,
-			primaryKey:    primaryKey,
-			title:         model.DisplayRansomwareTitle(entry),
-		})
+		groupKey := item.Messenger + "\x00" + job.destinationID + "\x00" + job.webhook.url
+		retryGroups[groupKey] = append(retryGroups[groupKey], job)
 	}
 
 	s.processAPIRetryGroups(ctx, cfg, retryGroups, markChanged)
 
 	if hasChanged() {
 		s.persistStatus("api retry queue processed")
+	}
+}
+
+type apiRetryPreparation struct {
+	entryMap                   map[string]model.RansomwareEntry
+	webhooks                   map[string]apiRetryWebhookInfo
+	legacyMessengerDestination map[string]string
+	markChanged                func()
+}
+
+func (s *Scheduler) prepareAPIRetryJob(retryRecord status.QueuedRetryRecord, preparation apiRetryPreparation) (apiRetryJob, bool) {
+	item := retryRecord.Item
+	routeID, destinationID := apiRetryRoute(item, preparation.legacyMessengerDestination)
+	wh, ok := preparation.webhooks[routeID]
+	if !ok {
+		fields := apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "unknown_destination")
+		fields["route_id"] = routeID
+		log.WithFields(fields).Warn("Skipping API retry item with unknown destination")
+		return apiRetryJob{}, false
+	}
+	if !wh.enabled {
+		log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "destination_disabled")).Warn("Skipping API retry item because destination is disabled")
+		return apiRetryJob{}, false
+	}
+	if wh.url == "" {
+		log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "destination_missing_url")).Warn("Skipping API retry item because destination URL is missing")
+		return apiRetryJob{}, false
+	}
+	if wh.quietHoursActive {
+		s.deferAPIRetryForQuietHours(retryRecord, destinationID, wh)
+		return apiRetryJob{}, false
+	}
+	if s.statusTracker.IsAPIItemSentToDestination(item.ItemKey, destinationID, wh.url) {
+		log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "already_sent")).Info("Removing API retry item already marked sent")
+		s.statusTracker.RemoveRetryQueueEntry(retryRecord.QueueKey)
+		preparation.markChanged()
+		return apiRetryJob{}, false
+	}
+	if entry, inWindow := preparation.entryMap[item.ItemKey]; inWindow {
+		s.skipInWindowAPIRetry(retryRecord, destinationID, wh, entry)
+		return apiRetryJob{}, false
+	}
+	entry, deadLetterReason, err := retryEntryFromPayload(item)
+	if err != nil {
+		fields := apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "invalid_payload")
+		if item.PayloadVersion != "" {
+			fields["payload_version"] = item.PayloadVersion
+		}
+		log.WithError(err).WithFields(fields).Error("Failed to reconstruct API retry item from payload")
+		s.deadLetterMalformedAPIRetryItem(retryRecord.QueueKey, deadLetterReason)
+		preparation.markChanged()
+		return apiRetryJob{}, false
+	}
+	if !filter.MatchesAPIEntry(wh.filters, entry) {
+		log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "filtered_reconstructed")).Info("API retry item filtered out by current webhook rules, keeping queued")
+		s.recordAPIRetryAuditEvent(item, destinationID, status.DeliveryAuditOutcomeFiltered, status.DeliveryAuditReasonFilterMismatch, map[string]string{
+			"queue_key":   retryRecord.QueueKey,
+			"retry_scope": "reconstructed_payload",
+		})
+		return apiRetryJob{}, false
+	}
+	return apiRetryJob{
+		item:          item,
+		queueKey:      retryRecord.QueueKey,
+		destinationID: destinationID,
+		webhook:       wh,
+		entry:         entry,
+		primaryKey:    model.GenerateRansomwareEntryKey(entry),
+		title:         model.DisplayRansomwareTitle(entry),
+	}, true
+}
+
+func (s *Scheduler) deferAPIRetryForQuietHours(retryRecord status.QueuedRetryRecord, destinationID string, wh apiRetryWebhookInfo) {
+	item := retryRecord.Item
+	fields := apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "quiet_hours")
+	if wh.quietHours != nil {
+		fields["quiet_hours_start"] = wh.quietHours.Start
+		fields["quiet_hours_end"] = wh.quietHours.End
+	}
+	log.WithFields(fields).Info("Deferring API retry item because quiet hours are active")
+	details := map[string]string{"queue_key": retryRecord.QueueKey}
+	if wh.quietHours != nil {
+		details["quiet_hours_start"] = wh.quietHours.Start
+		details["quiet_hours_end"] = wh.quietHours.End
+	}
+	s.recordAPIRetryAuditEvent(item, destinationID, status.DeliveryAuditOutcomeQuietHours, status.DeliveryAuditReasonQuietHours, details)
+}
+
+func (s *Scheduler) skipInWindowAPIRetry(retryRecord status.QueuedRetryRecord, destinationID string, wh apiRetryWebhookInfo, entry model.RansomwareEntry) {
+	item := retryRecord.Item
+	if !filter.MatchesAPIEntry(wh.filters, entry) {
+		log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "filtered_in_window")).Info("In-window API retry item filtered out by current webhook rules, keeping queued")
+		s.recordAPIRetryAuditEvent(item, destinationID, status.DeliveryAuditOutcomeFiltered, status.DeliveryAuditReasonFilterMismatch, map[string]string{
+			"queue_key":   retryRecord.QueueKey,
+			"retry_scope": "in_api_window",
+		})
+	} else {
+		log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, destinationID, "in_api_window")).Info("Skipping API retry item still present in current API response")
 	}
 }
 
