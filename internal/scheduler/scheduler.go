@@ -71,8 +71,9 @@ type Dependencies struct {
 }
 
 const (
-	schedulerShutdownTimeout    = 30 * time.Second
-	schedulerForcedShutdownWait = 2 * time.Second
+	schedulerShutdownTimeout      = 30 * time.Second
+	schedulerForcedShutdownWait   = 2 * time.Second
+	webhookDeliveryTimeoutMessage = "Webhook delivery timed out; provider or network did not respond before the deadline"
 
 	pollTypeAPI = "api"
 	pollTypeRSS = "rss"
@@ -1697,7 +1698,7 @@ func deliveryStatusMessage(messenger string, err error) string {
 		return "Webhook delivery canceled"
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "Webhook delivery timed out; provider or network did not respond before the deadline"
+		return webhookDeliveryTimeoutMessage
 	}
 
 	var statusErr *webhookhttp.HTTPStatusError
@@ -1739,7 +1740,7 @@ func deliveryStatusMessage(messenger string, err error) string {
 		}
 		var transportNetErr net.Error
 		if errors.As(err, &transportNetErr) && transportNetErr.Timeout() {
-			return "Webhook delivery timed out; provider or network did not respond before the deadline"
+			return webhookDeliveryTimeoutMessage
 		}
 		return fmt.Sprintf("%s webhook provider unavailable", messengerName)
 	}
@@ -1747,7 +1748,7 @@ func deliveryStatusMessage(messenger string, err error) string {
 	var netErr net.Error
 	if errors.As(err, &netErr) {
 		if netErr.Timeout() {
-			return "Webhook delivery timed out; provider or network did not respond before the deadline"
+			return webhookDeliveryTimeoutMessage
 		}
 		return fmt.Sprintf("%s webhook provider unavailable", messengerName)
 	}
