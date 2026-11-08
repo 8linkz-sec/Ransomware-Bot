@@ -496,7 +496,11 @@ func TestBulkSendAPIEntriesToDiscordLogsRetryJoinFields(t *testing.T) {
 	if failureEntry.Data["item_type"] != "api" {
 		t.Fatalf("item_type = %v, want api", failureEntry.Data["item_type"])
 	}
+	assertDiscordAPIRetryRecord(t, s, entry, itemKey, destinationID)
+}
 
+func assertDiscordAPIRetryRecord(t *testing.T, s *Scheduler, entry api.RansomwareEntry, itemKey, destinationID string) {
+	t.Helper()
 	retryItems := s.statusTracker.GetRetryItemsByType("api")
 	if len(retryItems) != 1 {
 		t.Fatalf("retry queue length = %d, want 1", len(retryItems))
@@ -2039,6 +2043,11 @@ func TestBulkSendAPIEntriesToSlackEnqueuesRetryOnFailure(t *testing.T) {
 	if s.statusTracker.IsAPIItemSentToWebhook(key, server.URL) {
 		t.Fatal("failed Slack send was marked sent")
 	}
+	assertSlackAPIRetryRecord(t, s, entry, key)
+}
+
+func assertSlackAPIRetryRecord(t *testing.T, s *Scheduler, entry api.RansomwareEntry, key string) {
+	t.Helper()
 	retryItems := s.statusTracker.GetRetryItemsByType("api")
 	if len(retryItems) != 1 {
 		t.Fatalf("retry queue length = %d, want 1", len(retryItems))
@@ -2348,7 +2357,11 @@ func TestCheckAPIOnceRoutesFetchedEntriesToSlackWebhook(t *testing.T) {
 	s.statusTracker.MarkAPIItemSentToWebhook(api.GenerateEntryKey(alreadySentEntry), "already sent", slackServer.URL)
 
 	s.checkAPIOnce(t.Context())
+	assertFetchedAPIEntriesRoutedToSlack(t, s, bodies, oldEntry, newEntry, filteredEntry, slackServer.URL)
+}
 
+func assertFetchedAPIEntriesRoutedToSlack(t *testing.T, s *Scheduler, bodies []string, oldEntry, newEntry, filteredEntry api.RansomwareEntry, slackURL string) {
+	t.Helper()
 	if len(bodies) != 2 {
 		t.Fatalf("slack request count = %d, want 2", len(bodies))
 	}
@@ -2359,11 +2372,11 @@ func TestCheckAPIOnceRoutesFetchedEntriesToSlackWebhook(t *testing.T) {
 		t.Fatalf("second Slack body does not contain newest victim %q: %s", newEntry.Victim, bodies[1])
 	}
 	for _, entry := range []api.RansomwareEntry{oldEntry, newEntry} {
-		if !s.statusTracker.IsAPIItemSentToWebhook(api.GenerateEntryKey(entry), slackServer.URL) {
+		if !s.statusTracker.IsAPIItemSentToWebhook(api.GenerateEntryKey(entry), slackURL) {
 			t.Fatalf("entry %q was not marked sent to Slack", entry.ID)
 		}
 	}
-	if s.statusTracker.IsAPIItemSentToWebhook(api.GenerateEntryKey(filteredEntry), slackServer.URL) {
+	if s.statusTracker.IsAPIItemSentToWebhook(api.GenerateEntryKey(filteredEntry), slackURL) {
 		t.Fatal("filtered API entry was marked sent")
 	}
 
@@ -2372,7 +2385,7 @@ func TestCheckAPIOnceRoutesFetchedEntriesToSlackWebhook(t *testing.T) {
 		t.Fatalf("NewTracker(reload) error = %v", err)
 	}
 	for _, entry := range []api.RansomwareEntry{oldEntry, newEntry} {
-		if !reloaded.IsAPIItemSentToWebhook(api.GenerateEntryKey(entry), slackServer.URL) {
+		if !reloaded.IsAPIItemSentToWebhook(api.GenerateEntryKey(entry), slackURL) {
 			t.Fatalf("entry %q sent marker was not persisted", entry.ID)
 		}
 	}
@@ -2401,31 +2414,7 @@ func TestProcessAPIDeliveryTargetPersistsPendingPayloadBeforeSend(t *testing.T) 
 		destinationID: destinationID,
 		messenger:     status.MessengerSlack.String(),
 		send: func(_ context.Context, _ string, _ api.RansomwareEntry, _ *notifyfmt.FormatOptions) error {
-			reloaded, err := status.NewTracker(s.config.DataDir)
-			if err != nil {
-				t.Fatalf("NewTracker(reload) error = %v", err)
-			}
-			records := reloaded.GetQueuedRetryItemsByType(status.RetryItemTypeAPI.String())
-			if len(records) != 1 {
-				t.Fatalf("queued API retry records before send = %d, want 1", len(records))
-			}
-			item := records[0].Item
-			if item.ItemKey != api.GenerateEntryKey(entry) {
-				t.Fatalf("pending item key = %q, want %q", item.ItemKey, api.GenerateEntryKey(entry))
-			}
-			if item.DestinationID != destinationID {
-				t.Fatalf("pending destination = %q, want %q", item.DestinationID, destinationID)
-			}
-			if item.RetryCount != 0 {
-				t.Fatalf("pending retry count = %d, want 0", item.RetryCount)
-			}
-			var queued api.RansomwareEntry
-			if err := json.Unmarshal(item.Payload, &queued); err != nil {
-				t.Fatalf("Unmarshal(pending payload) error = %v", err)
-			}
-			if queued.ID != entry.ID || queued.Victim != entry.Victim {
-				t.Fatalf("pending payload = %#v, want entry %#v", queued, entry)
-			}
+			assertPendingAPIItemBeforeSend(t, s, entry, destinationID)
 			checkedPendingBeforeSend = true
 			return nil
 		},
@@ -2438,6 +2427,35 @@ func TestProcessAPIDeliveryTargetPersistsPendingPayloadBeforeSend(t *testing.T) 
 	}
 	if records := s.statusTracker.GetQueuedRetryItemsByType(status.RetryItemTypeAPI.String()); len(records) != 0 {
 		t.Fatalf("queued API retry records after successful send = %d, want 0", len(records))
+	}
+}
+
+func assertPendingAPIItemBeforeSend(t *testing.T, s *Scheduler, entry api.RansomwareEntry, destinationID string) {
+	t.Helper()
+	reloaded, err := status.NewTracker(s.config.DataDir)
+	if err != nil {
+		t.Fatalf("NewTracker(reload) error = %v", err)
+	}
+	records := reloaded.GetQueuedRetryItemsByType(status.RetryItemTypeAPI.String())
+	if len(records) != 1 {
+		t.Fatalf("queued API retry records before send = %d, want 1", len(records))
+	}
+	item := records[0].Item
+	if item.ItemKey != api.GenerateEntryKey(entry) {
+		t.Fatalf("pending item key = %q, want %q", item.ItemKey, api.GenerateEntryKey(entry))
+	}
+	if item.DestinationID != destinationID {
+		t.Fatalf("pending destination = %q, want %q", item.DestinationID, destinationID)
+	}
+	if item.RetryCount != 0 {
+		t.Fatalf("pending retry count = %d, want 0", item.RetryCount)
+	}
+	var queued api.RansomwareEntry
+	if err := json.Unmarshal(item.Payload, &queued); err != nil {
+		t.Fatalf("Unmarshal(pending payload) error = %v", err)
+	}
+	if queued.ID != entry.ID || queued.Victim != entry.Victim {
+		t.Fatalf("pending payload = %#v, want entry %#v", queued, entry)
 	}
 }
 
