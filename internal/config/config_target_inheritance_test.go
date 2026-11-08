@@ -85,23 +85,28 @@ func TestWebhookEndpointConfigsTargetInheritsPerKeyIndependently(t *testing.T) {
 				QuietHours: blockQuietHours,
 				Targets:    []WebhookTarget{tc.target},
 			}
-			endpoints, inheritedFilters, inheritedQuietHours := webhookEndpointConfigs(webhook)
-			if len(endpoints) != 1 {
-				t.Fatalf("len(endpoints) = %d, want 1", len(endpoints))
-			}
-			if endpoints[0].Filters != tc.wantFilters {
-				t.Errorf("Filters = %p, want %p", endpoints[0].Filters, tc.wantFilters)
-			}
-			if endpoints[0].QuietHours != tc.wantQuietHours {
-				t.Errorf("QuietHours = %p, want %p", endpoints[0].QuietHours, tc.wantQuietHours)
-			}
-			if len(inheritedFilters) != 1 || inheritedFilters[0] != tc.wantInheritedFilters {
-				t.Errorf("inheritedFilters = %v, want [%v]", inheritedFilters, tc.wantInheritedFilters)
-			}
-			if len(inheritedQuietHours) != 1 || inheritedQuietHours[0] != tc.wantInheritedQuietHours {
-				t.Errorf("inheritedQuietHours = %v, want [%v]", inheritedQuietHours, tc.wantInheritedQuietHours)
-			}
+			assertTargetEndpointInheritance(t, webhook, tc.wantFilters, tc.wantQuietHours, tc.wantInheritedFilters, tc.wantInheritedQuietHours)
 		})
+	}
+}
+
+func assertTargetEndpointInheritance(t *testing.T, webhook WebhookConfig, wantFilters *WebhookFilters, wantQuietHours *QuietHours, wantInheritedFilters, wantInheritedQuietHours bool) {
+	t.Helper()
+	endpoints, inheritedFilters, inheritedQuietHours := webhookEndpointConfigs(webhook)
+	if len(endpoints) != 1 {
+		t.Fatalf("len(endpoints) = %d, want 1", len(endpoints))
+	}
+	if endpoints[0].Filters != wantFilters {
+		t.Errorf("Filters = %p, want %p", endpoints[0].Filters, wantFilters)
+	}
+	if endpoints[0].QuietHours != wantQuietHours {
+		t.Errorf("QuietHours = %p, want %p", endpoints[0].QuietHours, wantQuietHours)
+	}
+	if len(inheritedFilters) != 1 || inheritedFilters[0] != wantInheritedFilters {
+		t.Errorf("inheritedFilters = %v, want [%v]", inheritedFilters, wantInheritedFilters)
+	}
+	if len(inheritedQuietHours) != 1 || inheritedQuietHours[0] != wantInheritedQuietHours {
+		t.Errorf("inheritedQuietHours = %v, want [%v]", inheritedQuietHours, wantInheritedQuietHours)
 	}
 }
 
@@ -364,25 +369,22 @@ func TestValidateConfigWarnsOnceForTargetInheritance(t *testing.T) {
 			}
 
 			entries := hook.AllEntries()
-			warns := countTargetInheritanceWarnings(entries)
-			if len(warns) != len(tc.wantWarns) {
-				t.Fatalf("target-inheritance WARN count = %d, want %d (entries: %v)", len(warns), len(tc.wantWarns), warns)
-			}
-			for i, want := range tc.wantWarns {
-				for field, wantValue := range want {
-					gotValue, ok := warns[i].Data[field]
-					if !ok {
-						t.Fatalf("WARN[%d] has no field %q; fields = %v", i, field, warns[i].Data)
-					}
-					if gotValue != wantValue {
-						t.Errorf("WARN[%d] field %q = %v, want %v", i, field, gotValue, wantValue)
-					}
-				}
-			}
+			assertTargetInheritanceWarnings(t, entries, tc.wantWarns)
 			if len(tc.wantWarns) > 1 {
 				assertNoWebhookURLLeak(t, entries, sharedDiscordToken, sharedSlackToken)
 			}
 		})
+	}
+}
+
+func assertTargetInheritanceWarnings(t *testing.T, entries []*logrus.Entry, wantWarns []map[string]any) {
+	t.Helper()
+	warns := countTargetInheritanceWarnings(entries)
+	if len(warns) != len(wantWarns) {
+		t.Fatalf("target-inheritance WARN count = %d, want %d (entries: %v)", len(warns), len(wantWarns), warns)
+	}
+	for i, want := range wantWarns {
+		assertWebhookWarningFields(t, warns[i], i, want)
 	}
 }
 

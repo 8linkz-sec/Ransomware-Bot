@@ -443,23 +443,27 @@ func TestEnabledRSSFeedURLs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := EnabledRSSFeedURLs(tt.build())
-			if tt.want == nil {
-				if got != nil {
-					t.Fatalf("EnabledRSSFeedURLs() = %v, want nil", got)
-				}
-				return
-			}
-			if len(got) != len(tt.want) {
-				t.Fatalf("EnabledRSSFeedURLs() = %v, want %v", got, tt.want)
-			}
-			if len(tt.want) > 0 && !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("EnabledRSSFeedURLs() = %v, want %v", got, tt.want)
-			}
-			if !sort.StringsAreSorted(got) {
-				t.Fatalf("EnabledRSSFeedURLs() = %v, want a sorted result", got)
-			}
+			assertEnabledRSSFeedURLs(t, EnabledRSSFeedURLs(tt.build()), tt.want)
 		})
+	}
+}
+
+func assertEnabledRSSFeedURLs(t *testing.T, got, want []string) {
+	t.Helper()
+	if want == nil {
+		if got != nil {
+			t.Fatalf("EnabledRSSFeedURLs() = %v, want nil", got)
+		}
+		return
+	}
+	if len(got) != len(want) {
+		t.Fatalf("EnabledRSSFeedURLs() = %v, want %v", got, want)
+	}
+	if len(want) > 0 && !reflect.DeepEqual(got, want) {
+		t.Fatalf("EnabledRSSFeedURLs() = %v, want %v", got, want)
+	}
+	if !sort.StringsAreSorted(got) {
+		t.Fatalf("EnabledRSSFeedURLs() = %v, want a sorted result", got)
 	}
 }
 
