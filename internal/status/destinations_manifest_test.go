@@ -621,8 +621,8 @@ func TestDestinationManifestUnreadableFieldsNamesTheReason(t *testing.T) {
 		t.Fatalf("reason = %q, want the load error", reason)
 	}
 	consequence, _ := fields["consequence"].(string)
-	if !strings.Contains(consequence, "endpoint-order check is skipped") {
-		t.Fatalf("consequence = %q, want the skipped-check sentence", consequence)
+	if !strings.Contains(consequence, "new destination IDs require explicit acceptance") {
+		t.Fatalf("consequence = %q, want the uncertainty sentence", consequence)
 	}
 
 	// A parse failure carries no version, so the field must be absent.

@@ -39,7 +39,7 @@ const destinationRemapRemedy = "restore the previous endpoint order (append new 
 	"url/urls/targets, delete only from the end), or start once with --accept-destination-remap to accept " +
 	"the new mapping"
 
-const destinationManifestSkippedCheck = "the endpoint-order check is skipped for this start"
+const destinationManifestSkippedCheck = "old endpoint bindings are unknown; new destination IDs require explicit acceptance"
 
 // DestinationManifest binds active and removed positional IDs to webhook URL
 // hashes. UnknownIDs and Unattributed preserve uncertainty from version 1.
@@ -62,12 +62,11 @@ func DestinationManifestPath(dataDir string) string {
 	return filepath.Join(dataDir, destinationManifestFileName)
 }
 
-// LoadDestinationManifest reads destinations.json. A missing file and an empty
-// data directory both return (zero, false, nil); an unreadable, unparseable or
-// unknown-version file returns an error, and callers treat that as absent after
-// warning. Version 1 is upgraded and both versions are reconciled in memory
-// against persisted status rows.
-// On a version mismatch the returned manifest still carries the parsed version.
+// LoadDestinationManifest reads destinations.json. A missing file with no status
+// history and an empty data directory return (zero, false, nil). A missing file
+// with status history returns an uncertain in-memory manifest. Unreadable or
+// unsupported files return an uncertain manifest with an error. Both supported
+// versions are reconciled against persisted status rows.
 func LoadDestinationManifest(dataDir string) (DestinationManifest, bool, error) {
 	path := DestinationManifestPath(dataDir)
 	if path == "" {
@@ -77,19 +76,29 @@ func LoadDestinationManifest(dataDir string) (DestinationManifest, bool, error) 
 	data, err := os.ReadFile(path) //nolint:gosec // path is derived from the operator-configured data dir
 	if err != nil {
 		if os.IsNotExist(err) {
-			return DestinationManifest{}, false, nil
+			if _, dirErr := os.Stat(dataDir); os.IsNotExist(dirErr) {
+				return DestinationManifest{}, false, nil
+			}
+			if !hasPersistedStatusFiles(dataDir) {
+				return DestinationManifest{}, false, nil
+			}
+			missing := reconcilePersistedDestinationHistory(dataDir, DestinationManifest{
+				Version: DestinationManifestVersion, Destinations: map[string]string{},
+			})
+			missing.Unattributed = true // absent manifest cannot prove pruned old bindings
+			return missing, true, nil
 		}
-		return DestinationManifest{}, false, fmt.Errorf("read destination manifest %s: %w", path, err)
+		return uncertainDestinationManifest(), false, fmt.Errorf("read destination manifest %s: %w", path, err)
 	}
 
 	var manifest DestinationManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
-		return DestinationManifest{}, false, fmt.Errorf("parse destination manifest: %w", err)
+		return uncertainDestinationManifest(), false, fmt.Errorf("parse destination manifest: %w", err)
 	}
 	if manifest.Version != 1 && manifest.Version != DestinationManifestVersion {
-		return DestinationManifest{
-			Version: manifest.Version,
-		}, false, fmt.Errorf(
+		uncertain := uncertainDestinationManifest()
+		uncertain.Version = manifest.Version
+		return uncertain, false, fmt.Errorf(
 			"unsupported destination manifest version %d", manifest.Version)
 	}
 	if manifest.Destinations == nil {
@@ -97,6 +106,20 @@ func LoadDestinationManifest(dataDir string) (DestinationManifest, bool, error) 
 	}
 	manifest = reconcilePersistedDestinationHistory(dataDir, manifest)
 	return manifest, true, nil
+}
+
+func hasPersistedStatusFiles(dataDir string) bool {
+	for _, name := range []string{statusAPIFileName, statusRSSFileName, statusRetryFileName} {
+		_, err := os.Stat(filepath.Join(dataDir, name))
+		if err == nil || !os.IsNotExist(err) {
+			return true
+		}
+	}
+	return false
+}
+
+func uncertainDestinationManifest() DestinationManifest {
+	return DestinationManifest{Destinations: map[string]string{}, Unattributed: true}
 }
 
 // WriteDestinationManifest advances destinations.json atomically with the same
@@ -111,12 +134,8 @@ func WriteDestinationManifest(dataDir string, hashes map[string]string) error {
 		return fmt.Errorf("write destination manifest: %w", err)
 	}
 
-	previous, found, err := LoadDestinationManifest(dataDir)
-	if err != nil {
-		// Keep the existing self-heal policy for unreadable manifests. The
-		// caller has already warned when its pre-write check saw the error.
-		previous = DestinationManifest{}
-	} else if !found {
+	previous, found, _ := LoadDestinationManifest(dataDir)
+	if !found && !previous.Unattributed {
 		previous = DestinationManifest{}
 	}
 	manifest := NextDestinationManifest(previous, hashes)
@@ -452,7 +471,7 @@ func DestinationRemapLogFields(diff DestinationDiff, manifestPath string) log.Fi
 
 // DestinationManifestUnreadableFields describes a manifest that could not be
 // used, so the WARN says which file, why, which version it claimed when that
-// was parseable, and what the operator loses for this start.
+// was parseable, and why new IDs require explicit acceptance.
 func DestinationManifestUnreadableFields(dataDir string, manifest DestinationManifest, err error) log.Fields {
 	fields := log.Fields{
 		"manifest":    DestinationManifestPath(dataDir),

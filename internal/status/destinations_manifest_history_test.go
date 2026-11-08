@@ -2,11 +2,78 @@ package status
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestDestinationManifestMissingWithStatusRequiresAccept(t *testing.T) {
+	dir := t.TempDir()
+	tracker, err := NewTracker(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker.MarkAPIItemSentToDestination("old-item", "title", "discord.ransomware.2")
+	if err := tracker.SavePendingChanges(); err != nil {
+		t.Fatal(err)
+	}
+	manifest, found, err := LoadDestinationManifest(dir)
+	if err != nil || !found || !manifest.Unattributed || !reflect.DeepEqual(manifest.UnknownIDs, []string{"discord.ransomware.2"}) {
+		t.Fatalf("missing manifest history = %+v, found %v, err %v", manifest, found, err)
+	}
+	if diff := DiffDestinationManifest(manifest, map[string]string{"discord.ransomware.2": hashB}); !diff.HasRemap() {
+		t.Fatalf("missing manifest allowed reused ID: %+v", diff)
+	}
+	if err := WriteDestinationManifest(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	persisted, _, err := LoadDestinationManifest(dir)
+	if err != nil || !persisted.Unattributed {
+		t.Fatalf("uncertainty lost after empty start: %+v, err %v", persisted, err)
+	}
+}
+
+func TestDestinationManifestCorruptEmptyStartKeepsUncertainty(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(DestinationManifestPath(dir), []byte("{bad"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteDestinationManifest(dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	manifest, found, err := LoadDestinationManifest(dir)
+	if err != nil || !found || !manifest.Unattributed {
+		t.Fatalf("corrupt empty-start history = %+v, found %v, err %v", manifest, found, err)
+	}
+	if diff := DiffDestinationManifest(manifest, map[string]string{"discord.ransomware": hashB}); !diff.HasRemap() {
+		t.Fatalf("corrupt manifest allowed later reused ID: %+v", diff)
+	}
+}
+
+func TestDestinationManifestAcceptedURLChangeWriteFailurePreservesGuard(t *testing.T) {
+	dir := t.TempDir()
+	old := map[string]string{"discord.ransomware": hashA}
+	if err := WriteDestinationManifest(dir, old); err != nil {
+		t.Fatal(err)
+	}
+	original := writeAtomicJSONFileFunc
+	t.Cleanup(func() { writeAtomicJSONFileFunc = original })
+	wantErr := errors.New("disk full")
+	writeAtomicJSONFileFunc = func(string, string, interface{}) error { return wantErr }
+	changed := map[string]string{"discord.ransomware": hashB}
+	if err := WriteDestinationManifest(dir, changed); !errors.Is(err, wantErr) {
+		t.Fatalf("accepted URL-change write error = %v, want %v", err, wantErr)
+	}
+	manifest, found, err := LoadDestinationManifest(dir)
+	if err != nil || !found || manifest.Destinations["discord.ransomware"] != hashA {
+		t.Fatalf("failed write changed manifest: %+v, found %v, err %v", manifest, found, err)
+	}
+	if diff := DiffDestinationManifest(manifest, changed); !diff.HasRemap() {
+		t.Fatalf("failed accepted write lost URL-change guard: %+v", diff)
+	}
+}
 
 func writeLegacyDestinationManifest(t *testing.T, dir string, active map[string]string) {
 	t.Helper()

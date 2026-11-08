@@ -366,7 +366,8 @@ To make that mistake impossible to miss, the bot keeps `destinations.json` in `d
 active destination IDs to SHA-256 hashes of their webhook URLs and keeps the last hash for each
 removed ID. It stores hashes only, never a URL or token. It is written on every successful config
 load and created silently on the first start. Keep the file with the status files: deleting it
-discards the routing guard's history.
+loses the exact URL hashes. If status files remain, the bot treats their old destination bindings
+as unknown and requires `--accept-destination-remap` before using new positional IDs.
 
 If the URL behind an existing ID has changed since the last run, the bot **refuses to start** and
 logs an ERROR naming the affected IDs, what changed, the consequence, and the way out;
@@ -421,6 +422,12 @@ authorize later IDs. An ordinary appended ID remains allowed when the stored sta
 it is fresh. The status check also recovers IDs a version-2 manifest missed after a write error.
 If you intentionally reset all
 status files, also remove `destinations.json` before starting to create a clean history.
+
+An unreadable manifest also makes old bindings unknown. With configured endpoints, startup,
+`--check-config`, healthcheck, and hot reload refuse the mapping until an operator explicitly
+accepts it at startup. An empty-endpoint start may rewrite the file, but keeps the uncertainty
+for later IDs. A manifest write failure stops startup or rejects a hot reload before new endpoints
+can send; check the `data_dir` volume and permissions before retrying.
 
 Version-2 manifests contain the removed-ID history. Older binaries cannot enforce this format:
 on rollback they treat it as unreadable and may rewrite it, losing tombstones. Keep a backup of

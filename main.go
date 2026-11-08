@@ -297,11 +297,9 @@ func applyDestinationManifest(cfg *config.Config, opts cliOptions, out io.Writer
 
 	manifest, found, err := status.LoadDestinationManifest(cfg.DataDir)
 	if err != nil {
-		// Self-healing: the bot owns this file and nothing in it is
-		// irreplaceable, so a corruption must not become an outage.
 		log.WithFields(status.DestinationManifestUnreadableFields(cfg.DataDir, manifest, err)).
-			Warn("Destination manifest unreadable; rewriting it")
-		found = false
+			Warn("Destination manifest unreadable; accepting new bindings requires explicit operator approval")
+		found = true
 	}
 
 	if found {
@@ -327,8 +325,8 @@ func applyDestinationManifest(cfg *config.Config, opts cliOptions, out io.Writer
 	}
 	if err := status.WriteDestinationManifest(cfg.DataDir, current); err != nil {
 		log.WithError(err).WithField("manifest", manifestPath).
-			Warn("Failed to write the destination manifest")
-		return 0
+			Error("Failed to write the destination manifest; refusing to start")
+		return 1
 	}
 	log.WithFields(log.Fields{
 		"manifest":     manifestPath,
@@ -352,7 +350,8 @@ func pendingDestinationRemap(cfg *config.Config, dataDir string) (diff status.De
 	}
 	manifest, found, err := status.LoadDestinationManifest(dataDir)
 	if err != nil {
-		return status.DestinationDiff{}, false, err
+		diff = status.DiffDestinationManifest(manifest, config.DestinationURLHashes(cfg))
+		return diff, diff.HasRemap(), err
 	}
 	if !found {
 		return status.DestinationDiff{}, false, nil

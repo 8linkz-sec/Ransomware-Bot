@@ -367,7 +367,7 @@ func TestApplyDestinationManifestCountsOrphansWithoutReadingAPIStatus(t *testing
 	}
 }
 
-func TestApplyDestinationManifestTreatsCorruptManifestAsAbsent(t *testing.T) {
+func TestApplyDestinationManifestRequiresAcceptForCorruptManifest(t *testing.T) {
 	_, hook := captureDestinationLog(t)
 
 	dataDir := t.TempDir()
@@ -377,11 +377,11 @@ func TestApplyDestinationManifestTreatsCorruptManifestAsAbsent(t *testing.T) {
 	cfg := destinationManifestConfig(dataDir, destinationWebhookA, destinationWebhookB)
 
 	var out bytes.Buffer
-	if code := applyDestinationManifest(cfg, cliOptions{}, &out, i18n.Default()); code != 0 {
-		t.Fatalf("applyDestinationManifest() = %d, want 0; a corrupt manifest must self-heal", code)
+	if code := applyDestinationManifest(cfg, cliOptions{}, &out, i18n.Default()); code != 1 {
+		t.Fatalf("applyDestinationManifest() = %d, want refusal for unknown bindings", code)
 	}
 
-	entry := findRootTestLogEntry(hook, "Destination manifest unreadable; rewriting it")
+	entry := findRootTestLogEntry(hook, "Destination manifest unreadable; accepting new bindings requires explicit operator approval")
 	if entry == nil {
 		t.Fatalf("missing self-heal WARN; entries=%v", rootTestLogMessages(hook))
 	}
@@ -393,8 +393,11 @@ func TestApplyDestinationManifestTreatsCorruptManifestAsAbsent(t *testing.T) {
 		t.Fatalf("reason = %q, want the parse failure named", reason)
 	}
 	consequence, _ := entry.Data["consequence"].(string)
-	if !strings.Contains(consequence, "endpoint-order check is skipped") {
-		t.Fatalf("consequence = %q, want the cost of the self-heal named", consequence)
+	if !strings.Contains(consequence, "new destination IDs require explicit acceptance") {
+		t.Fatalf("consequence = %q, want the uncertainty named", consequence)
+	}
+	if code := applyDestinationManifest(cfg, cliOptions{acceptDestinationRemap: true}, &out, i18n.Default()); code != 0 {
+		t.Fatalf("accepted corrupt manifest start = %d, want 0", code)
 	}
 
 	manifest, found, err := status.LoadDestinationManifest(dataDir)
@@ -403,6 +406,13 @@ func TestApplyDestinationManifestTreatsCorruptManifestAsAbsent(t *testing.T) {
 	}
 	if manifest.Version != status.DestinationManifestVersion {
 		t.Fatalf("Version = %d, want %d", manifest.Version, status.DestinationManifestVersion)
+	}
+	if !manifest.Unattributed {
+		t.Fatal("accepted corrupt manifest lost unknown history")
+	}
+	future := destinationManifestConfig(dataDir, destinationWebhookA, destinationWebhookB, destinationWebhookC)
+	if code := applyDestinationManifest(future, cliOptions{}, &out, i18n.Default()); code != 1 {
+		t.Fatalf("later new ID after one accept = %d, want refusal", code)
 	}
 }
 
@@ -785,7 +795,7 @@ func rootTestLogMessages(hook *logtest.Hook) []string {
 	return messages
 }
 
-func TestApplyDestinationManifestWarnsWhenTheManifestCannotBeWritten(t *testing.T) {
+func TestApplyDestinationManifestRefusesWhenTheManifestCannotBeWritten(t *testing.T) {
 	_, hook := captureDestinationLog(t)
 
 	// A regular file cannot hold a manifest, so the write fails immediately.
@@ -796,15 +806,15 @@ func TestApplyDestinationManifestWarnsWhenTheManifestCannotBeWritten(t *testing.
 	cfg := destinationManifestConfig(dataDir, destinationWebhookA)
 
 	var out bytes.Buffer
-	if code := applyDestinationManifest(cfg, cliOptions{}, &out, i18n.Default()); code != 0 {
-		t.Fatalf("applyDestinationManifest() = %d, want 0; a manifest write must never stop the bot", code)
+	if code := applyDestinationManifest(cfg, cliOptions{acceptDestinationRemap: true}, &out, i18n.Default()); code != 1 {
+		t.Fatalf("applyDestinationManifest() = %d, want refusal before delivery", code)
 	}
-	entry := findRootTestLogEntry(hook, "Failed to write the destination manifest")
+	entry := findRootTestLogEntry(hook, "Failed to write the destination manifest; refusing to start")
 	if entry == nil {
-		t.Fatalf("missing write-failure WARN; entries=%v", rootTestLogMessages(hook))
+		t.Fatalf("missing write-failure ERROR; entries=%v", rootTestLogMessages(hook))
 	}
-	if entry.Level != log.WarnLevel {
-		t.Fatalf("write-failure level = %v, want warn", entry.Level)
+	if entry.Level != log.ErrorLevel {
+		t.Fatalf("write-failure level = %v, want error", entry.Level)
 	}
 }
 
@@ -868,9 +878,8 @@ func TestPendingDestinationRemapIsQuietWithoutStateOrChange(t *testing.T) {
 }
 
 // TestPendingDestinationRemapReturnsSkippedErrorOnCorruptManifest pins the
-// fix: a corrupt (unparsable) destinations.json must
-// surface as a distinct "skipped" signal, not silently collapse into
-// pending=false the same way a genuinely absent manifest does.
+// A corrupt manifest both explains why the old mapping is unknown and blocks
+// configured IDs until the operator accepts the replacement mapping.
 func TestPendingDestinationRemapReturnsSkippedErrorOnCorruptManifest(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := os.WriteFile(status.DestinationManifestPath(dataDir), []byte("{not json"), 0600); err != nil {
@@ -879,8 +888,8 @@ func TestPendingDestinationRemapReturnsSkippedErrorOnCorruptManifest(t *testing.
 	cfg := destinationManifestConfig(dataDir, destinationWebhookA, destinationWebhookB)
 
 	diff, pending, skipped := pendingDestinationRemap(cfg, dataDir)
-	if pending {
-		t.Fatalf("pendingDestinationRemap(corrupt manifest) pending = true, want false; diff = %+v", diff)
+	if !pending || !diff.HasRemap() {
+		t.Fatalf("pendingDestinationRemap(corrupt manifest) = %+v, pending %v, want refusal", diff, pending)
 	}
 	if skipped == nil {
 		t.Fatal("pendingDestinationRemap(corrupt manifest) skipped = nil, want the load error")
@@ -890,11 +899,7 @@ func TestPendingDestinationRemapReturnsSkippedErrorOnCorruptManifest(t *testing.
 	}
 }
 
-// TestRunCheckConfigWarnsWhenDestinationManifestUnreadable pins the matching
-// --check-config surface: a corrupt destinations.json must not
-// be silently indistinguishable from "no remap"; --check-config prints an
-// explicit warning naming the skip while its exit code stays exactly as
-// today (the endpoint-order guard being unreadable is not itself refused).
+// An unreadable manifest blocks --check-config before the bot can start.
 func TestRunCheckConfigWarnsWhenDestinationManifestUnreadable(t *testing.T) {
 	tmpDir := t.TempDir()
 	configDir := filepath.Join(tmpDir, "configs")
@@ -910,27 +915,15 @@ func TestRunCheckConfigWarnsWhenDestinationManifestUnreadable(t *testing.T) {
 	opts := cliOptions{configDir: configDir, dataDir: dataDir, locale: "en"}
 	var out bytes.Buffer
 	code := runCheckConfig(opts, &out, i18n.ForLocale("en"))
-	if code != 0 {
-		t.Fatalf("runCheckConfig() = %d, want 0 (a corrupt manifest is a warning, not a refusal): %s", code, out.String())
+	if code != 1 {
+		t.Fatalf("runCheckConfig() = %d, want refusal: %s", code, out.String())
 	}
-	if !strings.Contains(out.String(), "destinations.json could not be read") {
-		t.Fatalf("output missing the manifest-unreadable warning:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "parse destination manifest") {
-		t.Fatalf("output missing the underlying parse-failure reason:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "Configuration valid") {
-		t.Fatalf("output missing the usual success line:\n%s", out.String())
+	if !strings.Contains(out.String(), "previous endpoint binding unknown") {
+		t.Fatalf("output missing the unknown-binding refusal:\n%s", out.String())
 	}
 }
 
-// TestRunHealthcheckWarnsWhenDestinationManifestUnreadable pins the matching
-// --healthcheck surface: the same warning, still returning nil
-// (exit 0). This warning is best-effort: it is reached only when the
-// healthcheck gets all the way to its normal success summary, i.e. only if
-// the dead-letter, API-auth-suspension and RSS-health checks all pass first.
-// This fixture has no RSS webhook enabled and no dead letters, so it does
-// reach the summary.
+// A corrupt manifest makes healthcheck report the pending refusal.
 func TestRunHealthcheckWarnsWhenDestinationManifestUnreadable(t *testing.T) {
 	tmpDir := t.TempDir()
 	configDir := filepath.Join(tmpDir, "configs")
@@ -946,13 +939,7 @@ func TestRunHealthcheckWarnsWhenDestinationManifestUnreadable(t *testing.T) {
 
 	var out bytes.Buffer
 	err := runHealthcheckWithMessages(configDir, dataDir, &out, i18n.ForLocale("en"))
-	if err != nil {
-		t.Fatalf("runHealthcheckWithMessages() error = %v, want nil", err)
-	}
-	if !strings.Contains(out.String(), "Destination manifest unreadable") {
-		t.Fatalf("output missing the manifest-unreadable warning:\n%s", out.String())
-	}
-	if !strings.Contains(out.String(), "parse destination manifest") {
-		t.Fatalf("output missing the underlying parse-failure reason:\n%s", out.String())
+	if err == nil || !strings.Contains(err.Error(), "destination remap pending") {
+		t.Fatalf("runHealthcheckWithMessages() error = %v, want pending remap", err)
 	}
 }
