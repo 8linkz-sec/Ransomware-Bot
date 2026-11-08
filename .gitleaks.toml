@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Made-up credentials in Go test fixtures"
+targetRules = ["generic-api-key"]
+paths = ['''_test\.go$''']
