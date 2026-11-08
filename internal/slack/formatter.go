@@ -724,7 +724,7 @@ func slackNaturalText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return textutil.StripBidiControls(truncateSlackEntitySafeText(escaped, maxLength))
+		return truncateSlackEntitySafeText(tinyTextWithoutBidiControls(escaped, maxLength), maxLength)
 	}
 	return textutil.BidiIsolate(truncateSlackEntitySafeText(escaped, maxLength-2))
 }
@@ -735,7 +735,7 @@ func slackDescriptionText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return textutil.StripBidiControls(truncateSlackEntitySafeDescription(escaped, maxLength))
+		return truncateSlackEntitySafeDescription(tinyTextWithoutBidiControls(escaped, maxLength), maxLength)
 	}
 	return textutil.BidiIsolate(truncateSlackEntitySafeDescription(escaped, maxLength-2))
 }
@@ -746,9 +746,19 @@ func slackURLText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return textutil.StripBidiControls(truncateSlackEntitySafeMiddle(escaped, maxLength))
+		return truncateSlackEntitySafeMiddle(tinyTextWithoutBidiControls(escaped, maxLength), maxLength)
 	}
 	return textutil.BidiIsolateLTR(truncateSlackEntitySafeMiddle(escaped, maxLength-2))
+}
+
+// Keep a controls-only field nonempty when its positive budget is too small for
+// an isolate pair, then apply the existing entity-safe truncation.
+func tinyTextWithoutBidiControls(value string, maxLength int) string {
+	stripped := textutil.StripBidiControls(value)
+	if value != "" && stripped == "" && maxLength > 0 {
+		return "-"
+	}
+	return stripped
 }
 
 const (
