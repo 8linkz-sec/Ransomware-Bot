@@ -6384,77 +6384,87 @@ func TestSendUnsentRSSItemsStaleItemsDoNotConsumeCycleCap(t *testing.T) {
 
 	for _, staleCount := range []int{cycleLimit, cycleLimit + 1, 10 * cycleLimit} {
 		t.Run(fmt.Sprintf("stale_backlog_%d", staleCount), func(t *testing.T) {
-			s := newTestScheduler(t)
-			feedURL := "https://example.test/feed.xml"
-			s.config.Feeds.GeneralFeeds = []string{feedURL}
-			s.feedTypeMap = buildFeedTypeMap(s.config)
-			s.config.RSSMaxEntriesPerCycle = cycleLimit
-			s.config.RSSMaxItemAge = time.Hour
-
-			var mu sync.Mutex
-			var requestBodies []string
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				body, err := io.ReadAll(r.Body)
-				if err != nil {
-					t.Errorf("ReadAll(body) error = %v", err)
-				}
-				mu.Lock()
-				requestBodies = append(requestBodies, string(body))
-				mu.Unlock()
-				w.WriteHeader(http.StatusOK)
-			}))
-			defer server.Close()
-			s.config.SlackWebhooks.RSS = config.WebhookConfig{Enabled: true, URL: server.URL}
-
-			staleItems, fresh := seedStaleAndFreshRSSRecoveryItemsForTest(t, s, feedURL, staleCount)
-
-			destinationID := rssDestinationIDForTarget(status.MessengerSlack, config.FeedTypeGeneral, "")
-			if !enqueueRetryForTest(
-				t,
-				s.statusTracker, status.RetryRequest{
-					ItemKey:       fresh.Key,
-					DestinationID: destinationID,
-					Messenger:     status.Messenger(status.MessengerSlack.String()),
-					ItemType:      status.RetryItemType(status.RetryItemTypeRSS.String()),
-					Title:         fresh.Title,
-					LastError:     "previous webhook failure",
-					MaxAttempts:   5,
-					RetryWindow:   time.Hour,
-				},
-			) {
-				t.Fatal("EnqueueRetry() unexpectedly moved the fresh item to dead letter")
-			}
-			if got := len(s.statusTracker.GetRetryItemsByType("rss")); got != 1 {
-				t.Fatalf("queued RSS retry rows before recovery = %d, want 1", got)
-			}
-
-			s.sendUnsentRSSItems(t.Context(), nil)
-
-			mu.Lock()
-			bodies := append([]string(nil), requestBodies...)
-			mu.Unlock()
-			if len(bodies) != 1 {
-				t.Fatalf("POST count after cycle 1 = %d, want 1 (the fresh item behind %d stale items)", len(bodies), len(staleItems))
-			}
-			if !strings.Contains(bodies[0], fresh.Title) {
-				t.Fatalf("delivered body does not contain the fresh title %q: %s", fresh.Title, bodies[0])
-			}
-			if !s.statusTracker.IsRSSItemSentToWebhook(fresh.Key, server.URL) {
-				t.Fatal("fresh recovery item was not marked sent")
-			}
-			if got := len(s.statusTracker.GetRetryItemsByType("rss")); got != 0 {
-				t.Fatalf("queued RSS retry rows after cycle 1 = %d, want 0 (recovery is the RSS retry driver)", got)
-			}
-
-			s.sendUnsentRSSItems(t.Context(), nil)
-
-			mu.Lock()
-			bodies = append([]string(nil), requestBodies...)
-			mu.Unlock()
-			if len(bodies) != 1 {
-				t.Fatalf("POST count after cycle 2 = %d, want 1 (no re-send, no stale send)", len(bodies))
-			}
+			assertStaleBacklogDoesNotConsumeCycleCap(t, staleCount, cycleLimit)
 		})
+	}
+}
+
+func assertStaleBacklogDoesNotConsumeCycleCap(t *testing.T, staleCount, cycleLimit int) {
+	t.Helper()
+	s := newTestScheduler(t)
+	feedURL := "https://example.test/feed.xml"
+	s.config.Feeds.GeneralFeeds = []string{feedURL}
+	s.feedTypeMap = buildFeedTypeMap(s.config)
+	s.config.RSSMaxEntriesPerCycle = cycleLimit
+	s.config.RSSMaxItemAge = time.Hour
+
+	var mu sync.Mutex
+	var requestBodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("ReadAll(body) error = %v", err)
+		}
+		mu.Lock()
+		requestBodies = append(requestBodies, string(body))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	s.config.SlackWebhooks.RSS = config.WebhookConfig{Enabled: true, URL: server.URL}
+
+	staleItems, fresh := seedStaleAndFreshRSSRecoveryItemsForTest(t, s, feedURL, staleCount)
+
+	destinationID := rssDestinationIDForTarget(status.MessengerSlack, config.FeedTypeGeneral, "")
+	if !enqueueRetryForTest(
+		t,
+		s.statusTracker, status.RetryRequest{
+			ItemKey:       fresh.Key,
+			DestinationID: destinationID,
+			Messenger:     status.Messenger(status.MessengerSlack.String()),
+			ItemType:      status.RetryItemType(status.RetryItemTypeRSS.String()),
+			Title:         fresh.Title,
+			LastError:     "previous webhook failure",
+			MaxAttempts:   5,
+			RetryWindow:   time.Hour,
+		},
+	) {
+		t.Fatal("EnqueueRetry() unexpectedly moved the fresh item to dead letter")
+	}
+	if got := len(s.statusTracker.GetRetryItemsByType("rss")); got != 1 {
+		t.Fatalf("queued RSS retry rows before recovery = %d, want 1", got)
+	}
+
+	s.sendUnsentRSSItems(t.Context(), nil)
+
+	mu.Lock()
+	bodies := append([]string(nil), requestBodies...)
+	mu.Unlock()
+	assertFreshRecoveryDelivered(t, s, bodies, fresh, staleItems, server.URL)
+
+	s.sendUnsentRSSItems(t.Context(), nil)
+
+	mu.Lock()
+	bodies = append([]string(nil), requestBodies...)
+	mu.Unlock()
+	if len(bodies) != 1 {
+		t.Fatalf("POST count after cycle 2 = %d, want 1 (no re-send, no stale send)", len(bodies))
+	}
+}
+
+func assertFreshRecoveryDelivered(t *testing.T, s *Scheduler, bodies []string, fresh status.StoredRSSEntry, staleItems []status.StoredRSSEntry, webhookURL string) {
+	t.Helper()
+	if len(bodies) != 1 {
+		t.Fatalf("POST count after cycle 1 = %d, want 1 (the fresh item behind %d stale items)", len(bodies), len(staleItems))
+	}
+	if !strings.Contains(bodies[0], fresh.Title) {
+		t.Fatalf("delivered body does not contain the fresh title %q: %s", fresh.Title, bodies[0])
+	}
+	if !s.statusTracker.IsRSSItemSentToWebhook(fresh.Key, webhookURL) {
+		t.Fatal("fresh recovery item was not marked sent")
+	}
+	if got := len(s.statusTracker.GetRetryItemsByType("rss")); got != 0 {
+		t.Fatalf("queued RSS retry rows after cycle 1 = %d, want 0 (recovery is the RSS retry driver)", got)
 	}
 }
 
@@ -6498,46 +6508,12 @@ func TestSendUnsentRSSItemsStaleItemsStayUnmarkedAndAudited(t *testing.T) {
 		mu.Lock()
 		bodies := append([]string(nil), requestBodies...)
 		mu.Unlock()
-		for _, stale := range staleItems {
-			for _, body := range bodies {
-				if strings.Contains(body, stale.Title) {
-					t.Fatalf("cycle %d: stale item %q was delivered: %s", cycle, stale.Title, body)
-				}
-			}
-			if s.statusTracker.IsRSSItemSentToWebhook(stale.Key, server.URL) {
-				t.Fatalf("cycle %d: stale item %q was marked sent", cycle, stale.Key)
-			}
-			if s.statusTracker.IsRSSItemSentToDestination(stale.Key, destinationID, server.URL) {
-				t.Fatalf("cycle %d: stale item %q was marked sent for destination %s", cycle, stale.Key, destinationID)
-			}
-			entry, err := status.RSSEntryFromStored(stale)
-			if err != nil {
-				t.Fatalf("RSSEntryFromStored() error = %v", err)
-			}
-			contentSig := rss.GenerateEntryContentSignature(entry)
-			if s.statusTracker.IsRSSItemSentToDestination(contentSig, destinationID, server.URL) {
-				t.Fatalf("cycle %d: stale item %q content signature was marked sent", cycle, stale.Key)
-			}
-		}
+		assertStaleRecoveryItemsUnmarked(t, s, staleItems, destinationID, server.URL, bodies, cycle)
 	}
 
 	staleAuditCount := func(cycle int) int {
 		t.Helper()
-		events := deliveryAuditEventsForTest(t, s.config.DataDir)
-		count := 0
-		for _, stale := range staleItems {
-			for _, event := range events {
-				if event.ItemKey == stale.Key &&
-					event.Outcome == status.DeliveryAuditOutcomeStale &&
-					event.Reason == status.DeliveryAuditReasonStale {
-					count++
-				}
-			}
-		}
-		if count == 0 {
-			t.Fatalf("cycle %d: no stale audit events recorded", cycle)
-		}
-		return count
+		return countStaleRecoveryAuditEvents(t, s.config.DataDir, staleItems, cycle)
 	}
 
 	s.sendUnsentRSSItems(t.Context(), nil)
@@ -6583,13 +6559,7 @@ func TestSendUnsentRSSItemsStaleItemsStayUnmarkedAndAudited(t *testing.T) {
 
 	sentStaleCount := func() int {
 		t.Helper()
-		count := 0
-		for _, stale := range staleItems {
-			if s.statusTracker.IsRSSItemSentToWebhook(stale.Key, server.URL) {
-				count++
-			}
-		}
-		return count
+		return countSentStaleRecoveryItems(s, staleItems, server.URL)
 	}
 
 	s.sendUnsentRSSItems(t.Context(), nil)
@@ -6612,6 +6582,65 @@ func TestSendUnsentRSSItemsStaleItemsStayUnmarkedAndAudited(t *testing.T) {
 	if got := sentStaleCount(); got != len(staleItems) {
 		t.Fatalf("recovered stale items after cycle 4 = %d, want %d (all of them)", got, len(staleItems))
 	}
+}
+
+func assertStaleRecoveryItemsUnmarked(t *testing.T, s *Scheduler, staleItems []status.StoredRSSEntry, destinationID, webhookURL string, bodies []string, cycle int) {
+	t.Helper()
+	for _, stale := range staleItems {
+		assertStaleRecoveryItemNotDelivered(t, bodies, stale, cycle)
+		if s.statusTracker.IsRSSItemSentToWebhook(stale.Key, webhookURL) {
+			t.Fatalf("cycle %d: stale item %q was marked sent", cycle, stale.Key)
+		}
+		if s.statusTracker.IsRSSItemSentToDestination(stale.Key, destinationID, webhookURL) {
+			t.Fatalf("cycle %d: stale item %q was marked sent for destination %s", cycle, stale.Key, destinationID)
+		}
+		entry, err := status.RSSEntryFromStored(stale)
+		if err != nil {
+			t.Fatalf("RSSEntryFromStored() error = %v", err)
+		}
+		contentSig := rss.GenerateEntryContentSignature(entry)
+		if s.statusTracker.IsRSSItemSentToDestination(contentSig, destinationID, webhookURL) {
+			t.Fatalf("cycle %d: stale item %q content signature was marked sent", cycle, stale.Key)
+		}
+	}
+}
+
+func assertStaleRecoveryItemNotDelivered(t *testing.T, bodies []string, stale status.StoredRSSEntry, cycle int) {
+	t.Helper()
+	for _, body := range bodies {
+		if strings.Contains(body, stale.Title) {
+			t.Fatalf("cycle %d: stale item %q was delivered: %s", cycle, stale.Title, body)
+		}
+	}
+}
+
+func countStaleRecoveryAuditEvents(t *testing.T, dataDir string, staleItems []status.StoredRSSEntry, cycle int) int {
+	t.Helper()
+	events := deliveryAuditEventsForTest(t, dataDir)
+	count := 0
+	for _, stale := range staleItems {
+		for _, event := range events {
+			if event.ItemKey == stale.Key &&
+				event.Outcome == status.DeliveryAuditOutcomeStale &&
+				event.Reason == status.DeliveryAuditReasonStale {
+				count++
+			}
+		}
+	}
+	if count == 0 {
+		t.Fatalf("cycle %d: no stale audit events recorded", cycle)
+	}
+	return count
+}
+
+func countSentStaleRecoveryItems(s *Scheduler, staleItems []status.StoredRSSEntry, webhookURL string) int {
+	count := 0
+	for _, stale := range staleItems {
+		if s.statusTracker.IsRSSItemSentToWebhook(stale.Key, webhookURL) {
+			count++
+		}
+	}
+	return count
 }
 
 func TestLimitUnsentRSSItemsForCycleSeparatesStaleBudget(t *testing.T) {
