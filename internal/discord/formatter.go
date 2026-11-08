@@ -743,7 +743,7 @@ func discordNaturalText(value string, maxLength int) string {
 		return ""
 	}
 	if maxLength <= 2 {
-		return textutil.TruncateText(value, maxLength)
+		return textutil.StripBidiControls(textutil.TruncateText(value, maxLength))
 	}
 	return textutil.BidiIsolate(textutil.TruncateText(value, maxLength-2))
 }
@@ -759,7 +759,7 @@ func discordRichText(value string, maxLength int) string {
 	}
 	escaped := escapeDiscordMarkdownText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateText(escaped, maxLength)
+		return textutil.StripBidiControls(textutil.TruncateText(escaped, maxLength))
 	}
 	return textutil.BidiIsolate(textutil.TrimDanglingEscape(textutil.TruncateText(escaped, maxLength-2)))
 }
@@ -770,7 +770,7 @@ func discordDescriptionText(value string, maxLength int) string {
 	}
 	escaped := escapeDiscordMarkdownText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateDescription(escaped, maxLength)
+		return textutil.StripBidiControls(textutil.TruncateDescription(escaped, maxLength))
 	}
 	return textutil.BidiIsolate(textutil.TrimDanglingEscape(textutil.TruncateDescription(escaped, maxLength-2)))
 }
@@ -781,7 +781,7 @@ func discordURLText(value string, maxLength int) string {
 	}
 	escaped := escapeDiscordMarkdownText(value)
 	if maxLength <= 2 {
-		return textutil.TruncateMiddle(escaped, maxLength)
+		return textutil.StripBidiControls(textutil.TruncateMiddle(escaped, maxLength))
 	}
 	return textutil.BidiIsolateLTR(textutil.TrimDanglingEscape(textutil.TruncateMiddle(escaped, maxLength-2)))
 }

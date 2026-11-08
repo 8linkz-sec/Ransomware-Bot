@@ -724,7 +724,7 @@ func slackNaturalText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return truncateSlackEntitySafeText(escaped, maxLength)
+		return textutil.StripBidiControls(truncateSlackEntitySafeText(escaped, maxLength))
 	}
 	return textutil.BidiIsolate(truncateSlackEntitySafeText(escaped, maxLength-2))
 }
@@ -735,7 +735,7 @@ func slackDescriptionText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return truncateSlackEntitySafeDescription(escaped, maxLength)
+		return textutil.StripBidiControls(truncateSlackEntitySafeDescription(escaped, maxLength))
 	}
 	return textutil.BidiIsolate(truncateSlackEntitySafeDescription(escaped, maxLength-2))
 }
@@ -746,7 +746,7 @@ func slackURLText(value string, maxLength int) string {
 	}
 	escaped := escapeSlackMrkdwnText(value)
 	if maxLength <= 2 {
-		return truncateSlackEntitySafeMiddle(escaped, maxLength)
+		return textutil.StripBidiControls(truncateSlackEntitySafeMiddle(escaped, maxLength))
 	}
 	return textutil.BidiIsolateLTR(truncateSlackEntitySafeMiddle(escaped, maxLength-2))
 }
