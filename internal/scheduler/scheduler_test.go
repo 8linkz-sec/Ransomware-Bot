@@ -1342,10 +1342,7 @@ func TestReloadConfigEndToEndAppliesReloadableFiles(t *testing.T) {
 			t.Fatalf("Stop() error = %v", err)
 		}
 	}()
-	oldLogRotation := cfg.LogRotation
-	oldWebhookRequestTimeout := cfg.WebhookRequestTimeout
-	oldWebhookMaxRetries := cfg.WebhookMaxRetries
-	oldWebhookRetryDelay := cfg.WebhookRetryDelay
+	initialCfg := *cfg
 
 	reloadedGeneral := fmt.Sprintf(`{
   "log_level": "DEBUG",
@@ -1415,28 +1412,40 @@ func TestReloadConfigEndToEndAppliesReloadableFiles(t *testing.T) {
 	}
 
 	got := s.getConfig()
+	assertRestartOnlySettingsAfterReload(t, got, &initialCfg, oldDataDir, oldLogPath)
+	assertReloadedCoreSettings(t, got)
+	assertReloadedRoutingSettings(t, got)
+	assertReloadedSchedulerDependencies(t, s)
+}
+
+func assertRestartOnlySettingsAfterReload(t *testing.T, got, initial *config.Config, oldDataDir, oldLogPath string) {
+	t.Helper()
 	if got.DataDir != oldDataDir {
 		t.Fatalf("DataDir = %q, want restart-only old value %q", got.DataDir, oldDataDir)
 	}
 	if got.LogFilePath != oldLogPath {
 		t.Fatalf("LogFilePath = %q, want restart-only old value %q", got.LogFilePath, oldLogPath)
 	}
-	if got.LogRotation != oldLogRotation {
-		t.Fatalf("LogRotation = %+v, want restart-only old value %+v", got.LogRotation, oldLogRotation)
+	if got.LogRotation != initial.LogRotation {
+		t.Fatalf("LogRotation = %+v, want restart-only old value %+v", got.LogRotation, initial.LogRotation)
 	}
-	if got.WebhookRequestTimeout != oldWebhookRequestTimeout ||
-		got.WebhookMaxRetries != oldWebhookMaxRetries ||
-		got.WebhookRetryDelay != oldWebhookRetryDelay {
+	if got.WebhookRequestTimeout != initial.WebhookRequestTimeout ||
+		got.WebhookMaxRetries != initial.WebhookMaxRetries ||
+		got.WebhookRetryDelay != initial.WebhookRetryDelay {
 		t.Fatalf(
 			"webhook HTTP policy = timeout %v attempts %d delay %v, want restart-only %v/%d/%v",
 			got.WebhookRequestTimeout,
 			got.WebhookMaxRetries,
 			got.WebhookRetryDelay,
-			oldWebhookRequestTimeout,
-			oldWebhookMaxRetries,
-			oldWebhookRetryDelay,
+			initial.WebhookRequestTimeout,
+			initial.WebhookMaxRetries,
+			initial.WebhookRetryDelay,
 		)
 	}
+}
+
+func assertReloadedCoreSettings(t *testing.T, got *config.Config) {
+	t.Helper()
 	if got.LogLevel != "DEBUG" || log.GetLevel() != log.DebugLevel {
 		t.Fatalf("log level = config %q global %v, want DEBUG", got.LogLevel, log.GetLevel())
 	}
@@ -1455,6 +1464,10 @@ func TestReloadConfigEndToEndAppliesReloadableFiles(t *testing.T) {
 	if got.RetryMaxAttempts != 4 || got.RetryWindow != 12*time.Hour {
 		t.Fatalf("retry settings = attempts %d window %v, want 4/12h", got.RetryMaxAttempts, got.RetryWindow)
 	}
+}
+
+func assertReloadedRoutingSettings(t *testing.T, got *config.Config) {
+	t.Helper()
 	if !got.DiscordWebhooks.Ransomware.Enabled || got.DiscordWebhooks.Ransomware.Filters.IncludeCountries[0] != "DE" {
 		t.Fatalf("Discord ransomware webhook did not reload filters: %+v", got.DiscordWebhooks.Ransomware)
 	}
@@ -1470,6 +1483,10 @@ func TestReloadConfigEndToEndAppliesReloadableFiles(t *testing.T) {
 	if got.Format.RSS.TitleText != "Reloaded RSS" || got.Format.Slack.RSSText != "Reloaded RSS Slack" || got.Format.Discord.DescriptionMaxChars != 321 {
 		t.Fatalf("format config did not reload: %+v", got.Format)
 	}
+}
+
+func assertReloadedSchedulerDependencies(t *testing.T, s *Scheduler) {
+	t.Helper()
 	if feedType := s.feedTypeMap["https://feeds.example.test/new-general.xml"]; feedType != config.FeedTypeGeneral {
 		t.Fatalf("feedTypeMap new general feed = %q, want general", feedType)
 	}
@@ -1547,6 +1564,11 @@ func TestReloadConfigAuditsAlertRoutingChangesWithoutSecrets(t *testing.T) {
 		t.Fatal("ReloadConfig() changed = false, want true")
 	}
 
+	assertRoutingReloadAuditEntries(t, hook, webhookURL)
+}
+
+func assertRoutingReloadAuditEntries(t *testing.T, hook *logtest.Hook, webhookURL string) {
+	t.Helper()
 	enabledEntry := findTestLogEntryWithField(hook, "Config reload alert routing changed", "field", "slack.rss.enabled")
 	if enabledEntry == nil {
 		t.Fatalf("missing alert-routing audit log for slack.rss.enabled; entries=%#v", hook.AllEntries())
@@ -1612,14 +1634,7 @@ func TestReloadConfigAuditNeverHashesSecrets(t *testing.T) {
 	for _, secret := range secrets {
 		forbidden = append(forbidden, secret, safeHashPrefix(secret))
 	}
-	for _, event := range events {
-		rendered := fmt.Sprint(event)
-		for _, value := range forbidden {
-			if strings.Contains(rendered, value) {
-				t.Fatalf("event %q contains %q (a secret or a hash derived from one): %#v", event["field"], value, event)
-			}
-		}
-	}
+	assertReloadAuditEventsContainNoSecrets(t, events, forbidden)
 
 	byField := make(map[string]map[string]any, len(events))
 	for _, event := range events {
@@ -1641,6 +1656,18 @@ func TestReloadConfigAuditNeverHashesSecrets(t *testing.T) {
 		}
 		if event["old_present"] != true || event["new_present"] != true {
 			t.Fatalf("event %q old_present/new_present = %#v/%#v, want true/true", field, event["old_present"], event["new_present"])
+		}
+	}
+}
+
+func assertReloadAuditEventsContainNoSecrets(t *testing.T, events []log.Fields, forbidden []string) {
+	t.Helper()
+	for _, event := range events {
+		rendered := fmt.Sprint(event)
+		for _, value := range forbidden {
+			if strings.Contains(rendered, value) {
+				t.Fatalf("event %q contains %q (a secret or a hash derived from one): %#v", event["field"], value, event)
+			}
 		}
 	}
 }
