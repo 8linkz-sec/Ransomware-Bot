@@ -9,6 +9,7 @@
 
 ### Improved
 
+- Successful API sends complete the delivery audit write attempt before marking an item sent, so concurrent status saves cannot get ahead of an in-progress audit write.
 - HTML-derived alert text removes invisible word joiners and soft hyphens. An RSS item identified only by its title may be delivered once more after the upgrade if its title contained either character.
 - Shared webhook URLs with three or more destinations no longer replay older alerts when status retention trims sent markers.
 - Discord API alert descriptions now remove HTML tags and decode entities, matching Slack and RSS descriptions.
