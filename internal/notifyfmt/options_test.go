@@ -9,7 +9,14 @@ import (
 
 func TestDefaultFormatOptions(t *testing.T) {
 	opts := DefaultFormatOptions()
+	assertCommonFormatDefaults(t, opts)
+	assertDiscordFormatDefaults(t, opts)
+	assertSlackFormatDefaults(t, opts)
+	assertRSSFormatDefaults(t, opts)
+}
 
+func assertCommonFormatDefaults(t *testing.T, opts FormatOptions) {
+	t.Helper()
 	if !opts.ShowUnicodeFlags {
 		t.Fatal("ShowUnicodeFlags = false, want true")
 	}
@@ -28,7 +35,10 @@ func TestDefaultFormatOptions(t *testing.T) {
 	if !reflect.DeepEqual(opts.FieldOrder, formatfields.DefaultDiscordFieldOrder()) {
 		t.Fatalf("FieldOrder = %#v, want default Discord field order", opts.FieldOrder)
 	}
+}
 
+func assertDiscordFormatDefaults(t *testing.T, opts FormatOptions) {
+	t.Helper()
 	if !opts.Discord.ShowIcons {
 		t.Fatal("Discord.ShowIcons = false, want true")
 	}
@@ -40,7 +50,10 @@ func TestDefaultFormatOptions(t *testing.T) {
 	if opts.Discord.DescriptionMaxChars != DefaultDescriptionMaxChars {
 		t.Fatalf("Discord.DescriptionMaxChars = %d, want %d", opts.Discord.DescriptionMaxChars, DefaultDescriptionMaxChars)
 	}
+}
 
+func assertSlackFormatDefaults(t *testing.T, opts FormatOptions) {
+	t.Helper()
 	if opts.Slack.TitleText != DefaultSlackTitleText {
 		t.Fatalf("Slack.TitleText = %q, want %q", opts.Slack.TitleText, DefaultSlackTitleText)
 	}
@@ -53,7 +66,10 @@ func TestDefaultFormatOptions(t *testing.T) {
 	if opts.Slack.DescriptionMaxChars != DefaultDescriptionMaxChars {
 		t.Fatalf("Slack.DescriptionMaxChars = %d, want %d", opts.Slack.DescriptionMaxChars, DefaultDescriptionMaxChars)
 	}
+}
 
+func assertRSSFormatDefaults(t *testing.T, opts FormatOptions) {
+	t.Helper()
 	if opts.RSS.TitleText != DefaultRSSTitleText {
 		t.Fatalf("RSS.TitleText = %q, want %q", opts.RSS.TitleText, DefaultRSSTitleText)
 	}
