@@ -1395,6 +1395,26 @@ func TestRunListDeadLetterFailsWhenDataDirMissing(t *testing.T) {
 	}
 }
 
+type rssHealthVerdictCase struct {
+	name       string
+	cfg        func() *config.Config
+	feeds      map[string]feedSeed
+	nilTracker bool
+	now        time.Time
+	// readyConfirmed and rssMarkerOverrun are Part (b) additions.
+	// readyConfirmed defaults to false on every existing row (Go zero
+	// value), which keeps them exercising the pre-Part-(b) "first-start
+	// grace" path unchanged. rssMarkerOverrun only matters when
+	// readyConfirmed is true: nil means no .rss progress marker is
+	// written at all (the fail-open "no completed pass recorded yet"
+	// case, F1), and a non-nil value writes one with that budget_overrun
+	// flag for readRSSProgressMarker to read.
+	readyConfirmed   bool
+	rssMarkerOverrun *bool
+	wantErr          map[string]string // locale -> substring
+	wantWarn         map[string]string // locale -> substring
+}
+
 func TestEvaluateRSSHealth(t *testing.T) {
 	base := time.Date(2026, 9, 3, 11, 0, 0, 0, time.UTC)
 	allowed := rssStaleSuccessIntervals * config.DefaultConfig().RSSPollInterval
@@ -1411,25 +1431,7 @@ func TestEvaluateRSSHealth(t *testing.T) {
 		return cfg
 	}
 
-	tests := []struct {
-		name       string
-		cfg        func() *config.Config
-		feeds      map[string]feedSeed
-		nilTracker bool
-		now        time.Time
-		// readyConfirmed and rssMarkerOverrun are Part (b) additions.
-		// readyConfirmed defaults to false on every existing row (Go zero
-		// value), which keeps them exercising the pre-Part-(b) "first-start
-		// grace" path unchanged. rssMarkerOverrun only matters when
-		// readyConfirmed is true: nil means no .rss progress marker is
-		// written at all (the fail-open "no completed pass recorded yet"
-		// case, F1), and a non-nil value writes one with that budget_overrun
-		// flag for readRSSProgressMarker to read.
-		readyConfirmed   bool
-		rssMarkerOverrun *bool
-		wantErr          map[string]string // locale -> substring
-		wantWarn         map[string]string // locale -> substring
-	}{
+	tests := []rssHealthVerdictCase{
 		{
 			name:  "nil config is a zero verdict",
 			cfg:   func() *config.Config { return nil },
@@ -1624,61 +1626,80 @@ func TestEvaluateRSSHealth(t *testing.T) {
 	for _, tt := range tests {
 		for _, locale := range []string{"en", "de"} {
 			t.Run(tt.name+"/"+locale, func(t *testing.T) {
-				var tracker *status.Tracker
-				if !tt.nilTracker {
-					dataDir := seedRSSFeedStatus(t, tt.feeds)
-					seeded, err := status.NewReadOnlyTracker(dataDir)
-					if err != nil {
-						t.Fatalf("NewReadOnlyTracker() error = %v", err)
-					}
-					tracker = seeded
-				}
-
-				if tt.readyConfirmed {
-					markerPath := filepath.Join(t.TempDir(), "ransomware-bot.ready")
-					if err := os.WriteFile(markerPath, []byte("marker"), 0600); err != nil {
-						t.Fatalf("WriteFile(marker) error = %v", err)
-					}
-					t.Setenv(readinessFileEnv, markerPath)
-					if tt.rssMarkerOverrun != nil {
-						content := fmt.Sprintf("at=%s\nstale_after=1m\nbudget_overrun=%t\n",
-							tt.now.Add(-time.Minute).UTC().Format(time.RFC3339), *tt.rssMarkerOverrun)
-						if err := os.WriteFile(markerPath+progressMarkerSuffixRSS, []byte(content), 0600); err != nil {
-							t.Fatalf("WriteFile(rss marker) error = %v", err)
-						}
-					}
-				}
-
-				verdict := evaluateRSSHealth(tt.cfg(), tracker, tt.now, i18n.ForLocale(locale), tt.readyConfirmed)
-
-				wantErr := tt.wantErr[locale]
-				if wantErr == "" {
-					if verdict.err != nil {
-						t.Fatalf("evaluateRSSHealth() err = %v, want nil", verdict.err)
-					}
-				} else {
-					if verdict.err == nil {
-						t.Fatalf("evaluateRSSHealth() err = nil, want %q", wantErr)
-					}
-					if !strings.Contains(verdict.err.Error(), wantErr) {
-						t.Fatalf("evaluateRSSHealth() err = %v, want it to contain %q", verdict.err, wantErr)
-					}
-				}
-
-				wantWarn := tt.wantWarn[locale]
-				if wantWarn == "" {
-					if verdict.warn != "" {
-						t.Fatalf("evaluateRSSHealth() warn = %q, want empty", verdict.warn)
-					}
-				} else {
-					if !strings.Contains(verdict.warn, wantWarn) {
-						t.Fatalf("evaluateRSSHealth() warn = %q, want it to contain %q", verdict.warn, wantWarn)
-					}
-					if !strings.HasSuffix(verdict.warn, "\n") {
-						t.Fatalf("evaluateRSSHealth() warn = %q, want a trailing newline", verdict.warn)
-					}
-				}
+				assertRSSHealthVerdictCase(t, tt, locale)
 			})
+		}
+	}
+}
+
+func assertRSSHealthVerdictCase(t *testing.T, tt rssHealthVerdictCase, locale string) {
+	t.Helper()
+	tracker := rssHealthCaseTracker(t, tt)
+	if tt.readyConfirmed {
+		writeRSSHealthCaseMarkers(t, tt)
+	}
+	verdict := evaluateRSSHealth(tt.cfg(), tracker, tt.now, i18n.ForLocale(locale), tt.readyConfirmed)
+	assertRSSHealthVerdictError(t, verdict.err, tt.wantErr[locale])
+	assertRSSHealthVerdictWarning(t, verdict.warn, tt.wantWarn[locale])
+}
+
+func rssHealthCaseTracker(t *testing.T, tt rssHealthVerdictCase) *status.Tracker {
+	t.Helper()
+	if tt.nilTracker {
+		return nil
+	}
+	dataDir := seedRSSFeedStatus(t, tt.feeds)
+	seeded, err := status.NewReadOnlyTracker(dataDir)
+	if err != nil {
+		t.Fatalf("NewReadOnlyTracker() error = %v", err)
+	}
+	return seeded
+}
+
+func writeRSSHealthCaseMarkers(t *testing.T, tt rssHealthVerdictCase) {
+	t.Helper()
+	markerPath := filepath.Join(t.TempDir(), "ransomware-bot.ready")
+	if err := os.WriteFile(markerPath, []byte("marker"), 0600); err != nil {
+		t.Fatalf("WriteFile(marker) error = %v", err)
+	}
+	t.Setenv(readinessFileEnv, markerPath)
+	if tt.rssMarkerOverrun != nil {
+		content := fmt.Sprintf("at=%s\nstale_after=1m\nbudget_overrun=%t\n",
+			tt.now.Add(-time.Minute).UTC().Format(time.RFC3339), *tt.rssMarkerOverrun)
+		if err := os.WriteFile(markerPath+progressMarkerSuffixRSS, []byte(content), 0600); err != nil {
+			t.Fatalf("WriteFile(rss marker) error = %v", err)
+		}
+	}
+}
+
+func assertRSSHealthVerdictError(t *testing.T, got error, wantErr string) {
+	t.Helper()
+	if wantErr == "" {
+		if got != nil {
+			t.Fatalf("evaluateRSSHealth() err = %v, want nil", got)
+		}
+	} else {
+		if got == nil {
+			t.Fatalf("evaluateRSSHealth() err = nil, want %q", wantErr)
+		}
+		if !strings.Contains(got.Error(), wantErr) {
+			t.Fatalf("evaluateRSSHealth() err = %v, want it to contain %q", got, wantErr)
+		}
+	}
+}
+
+func assertRSSHealthVerdictWarning(t *testing.T, got, wantWarn string) {
+	t.Helper()
+	if wantWarn == "" {
+		if got != "" {
+			t.Fatalf("evaluateRSSHealth() warn = %q, want empty", got)
+		}
+	} else {
+		if !strings.Contains(got, wantWarn) {
+			t.Fatalf("evaluateRSSHealth() warn = %q, want it to contain %q", got, wantWarn)
+		}
+		if !strings.HasSuffix(got, "\n") {
+			t.Fatalf("evaluateRSSHealth() warn = %q, want a trailing newline", got)
 		}
 	}
 }
