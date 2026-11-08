@@ -8,6 +8,7 @@
 - RSS polling leaves feeds that finish after the cycle deadline for the next cycle.
 - Slack ransomware alerts place the Website field closer to its configured position.
 - API request logs hide configured URL credentials, including query values containing `)`.
+- Long Slack messages no longer show broken `&`, `<`, or `>` escapes when shortened.
 
 ## 1.2.0 - 2026-09-18
 
