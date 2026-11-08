@@ -160,7 +160,8 @@ func DefangURL(url string) string {
 	return url
 }
 
-// StripHTML removes HTML tags and decodes common HTML entities from text.
+// StripHTML removes HTML tags, decodes common HTML entities, and removes
+// embedded bidi controls from text.
 // Multiple whitespace characters are collapsed into a single space.
 func StripHTML(input string) string {
 	if input == "" {
@@ -172,6 +173,7 @@ func StripHTML(input string) string {
 
 	text = decodeHTMLEntities(text)
 	text = strings.ReplaceAll(text, "\u00a0", " ")
+	text = StripBidiControls(text)
 	text = stripInvisibleFormatting(text)
 
 	// Clean up multiple spaces and trim

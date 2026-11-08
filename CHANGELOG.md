@@ -10,6 +10,7 @@
 ### Improved
 
 - Long Slack messages no longer show broken `&`, `<`, or `>` escapes when shortened.
+- HTML-derived alert text now removes embedded Unicode direction controls before formatting.
 
 ## 1.2.1 - 2026-09-18
 
