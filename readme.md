@@ -363,9 +363,11 @@ safe, and enabling or disabling a whole block is safe — but the endpoint order
 guarded even while the block is disabled, so reordering it will refuse the next start.
 
 To make that mistake impossible to miss, the bot keeps `destinations.json` in `data_dir`. It maps
-each destination ID to a SHA-256 hash of the webhook URL it was last used with — hashes only, never
-a URL and never a token. It is written on every successful config load, it is created silently on
-the first start, and deleting it simply recreates it on the next start.
+active destination IDs to SHA-256 hashes of their webhook URLs and keeps the last hash for each
+removed ID. It stores hashes only, never a URL or token. It is written on every successful config
+load and created silently on the first start. Keep the file with the status files: deleting it
+loses the exact URL hashes. If status files remain, the bot treats their old destination bindings
+as unknown and requires `--accept-destination-remap` before using new positional IDs.
 
 If the URL behind an existing ID has changed since the last run, the bot **refuses to start** and
 logs an ERROR naming the affected IDs, what changed, the consequence, and the way out;
@@ -401,15 +403,36 @@ movement list is the authoritative description. There are exactly **two ways out
 
 Deleting endpoints from the end is fine and needs no flag; the bot logs one INFO naming the removed
 IDs and how many retry-queue and dead-letter rows still carry them. Those rows expire with
-`retry_queue_max_age` / `dead_letter_max_age`.
+`retry_queue_max_age` / `dead_letter_max_age`. The manifest retains removed IDs and their hashes:
+re-adding an endpoint at the same position with the same URL is safe, while reusing that position
+for a different URL requires `--accept-destination-remap`. This also catches a swap made across
+two starts with an empty or shortened endpoint list between them.
 
 The check compares URLs byte-exactly after trimming surrounding whitespace, the same normalisation
 the deduplication key uses. Re-typing one endpoint's URL with a trailing slash or a different host
 capitalisation therefore reads as a changed URL and refuses the start.
 
-The guard is not a tombstone log: removing endpoints in one run and re-adding them in a different
-order in a later run is not detected, because every ID leaves the manifest as removed and comes back
-as new. Change the order in one edit, not in two.
+Existing version-1 manifests are upgraded on the next successful write. A version-1 manifest may
+already have forgotten removed IDs. During the upgrade the bot looks for those IDs in persisted
+sent markers, retries and dead letters. Reusing one requires explicit acceptance because its old
+URL hash is unknowable. A marker without a destination ID has an irreversible hashed key; when
+the upgrade sees such state, the manifest conservatively requires explicit acceptance for
+each new positional ID until a clean status-and-manifest reset. The first accepted ID does not
+authorize later IDs. An ordinary appended ID remains allowed when the stored state proves that
+it is fresh. The status check also recovers IDs a version-2 manifest missed after a write error.
+If you intentionally reset all
+status files, also remove `destinations.json` before starting to create a clean history.
+
+An unreadable manifest also makes old bindings unknown. With configured endpoints, startup,
+`--check-config`, healthcheck, and hot reload refuse the mapping until an operator explicitly
+accepts it at startup. An empty-endpoint start may rewrite the file, but keeps the uncertainty
+for later IDs. A manifest write failure stops startup or rejects a hot reload before new endpoints
+can send; check the `data_dir` volume and permissions before retrying.
+
+Version-2 manifests contain the removed-ID history. Older binaries cannot enforce this format:
+on rollback they treat it as unreadable and may rewrite it, losing tombstones. Keep a backup of
+`destinations.json` before a rollback and restore it when returning to the newer binary; do not
+change endpoint order while running the older binary.
 
 ### Per-Webhook Filters
 

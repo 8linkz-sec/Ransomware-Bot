@@ -1126,17 +1126,9 @@ func (s *Scheduler) applyReloadedConfig(newCfg *config.Config) (bool, error) {
 		return false, err
 	}
 
-	var replacementAPIClient *api.Client
-	var err error
-	if apiClientSettingsChanged(oldCfg, newCfg) || s.apiClient == nil {
-		replacementAPIClient, err = api.NewClientWithBaseURLAndPolicy(
-			newCfg.APIKey,
-			newCfg.APIBaseURL,
-			apiHTTPPolicyForConfig(newCfg),
-		)
-		if err != nil {
-			return false, fmt.Errorf("failed to rebuild API client during config reload: %w", err)
-		}
+	replacementAPIClient, err := newReloadAPIClient(oldCfg, newCfg, s.apiClient)
+	if err != nil {
+		return false, err
 	}
 
 	var replacementRSSParser *rss.Parser
@@ -1151,6 +1143,10 @@ func (s *Scheduler) applyReloadedConfig(newCfg *config.Config) (bool, error) {
 	if replacementRSSParser != nil {
 		s.rssMu.Lock()
 		defer s.rssMu.Unlock()
+	}
+	// Persist the new binding before any delivery can use the new config.
+	if err := s.persistDestinationManifestBeforeReload(newCfg, replacementAPIClient); err != nil {
+		return false, err
 	}
 
 	s.configMu.Lock()
@@ -1183,20 +1179,39 @@ func (s *Scheduler) applyReloadedConfig(newCfg *config.Config) (bool, error) {
 
 	filter.ClearRegexCache()
 	pruneRSSFeedStatusForConfig(s.statusTracker, newCfg, s.dryRun)
-	// NOT under apiMu/rssMu unless a replacement client/parser was built above
-	// (:931-938) -- those locks are conditional, this write is not.
-	// applyReloadedConfig has two internal callers: runConfigWatcher (a single
-	// ticker-driven goroutine -- the only one actually wired into Start()) and
-	// the exported ReloadConfig() (no production caller today, but nothing
-	// stops a future one running concurrently with the watcher). Today's safety
-	// rests entirely on runConfigWatcher being the only caller anything in this
-	// binary invokes, plus status.WriteDestinationManifest writing atomically
-	// (temp+rename) to a path fixed by cfg.DataDir. If ReloadConfig() is ever
-	// wired to a second live trigger (admin endpoint, signal handler, ...), it
-	// must take its own lock around this call (or a dedicated manifest mutex).
-	s.writeDestinationManifestAfterReload(newCfg)
-
 	return true, nil
+}
+
+func newReloadAPIClient(oldCfg, newCfg *config.Config, current APIClient) (*api.Client, error) {
+	if !apiClientSettingsChanged(oldCfg, newCfg) && current != nil {
+		return nil, nil
+	}
+	client, err := api.NewClientWithBaseURLAndPolicy(
+		newCfg.APIKey,
+		newCfg.APIBaseURL,
+		apiHTTPPolicyForConfig(newCfg),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to rebuild API client during config reload: %w", err)
+	}
+	return client, nil
+}
+
+func (s *Scheduler) persistDestinationManifestBeforeReload(cfg *config.Config, replacementAPIClient *api.Client) error {
+	if s.dryRun || cfg.DataDir == "" {
+		return nil
+	}
+	if err := status.WriteDestinationManifest(cfg.DataDir, config.DestinationURLHashes(cfg)); err != nil {
+		if replacementAPIClient != nil {
+			if closeErr := replacementAPIClient.Close(); closeErr != nil {
+				log.WithError(closeErr).Warn("Failed to close unused API client after rejected reload")
+			}
+		}
+		log.WithError(err).WithField("manifest", status.DestinationManifestPath(cfg.DataDir)).
+			Error("Config reload rejected: destination manifest write failed")
+		return err
+	}
+	return nil
 }
 
 func rssParserSettingsChanged(oldCfg, newCfg *config.Config) bool {
@@ -1242,8 +1257,7 @@ func (s *Scheduler) updateReloadedIntervalsAndLogLevel(oldCfg, newCfg *config.Co
 
 // rejectDestinationRemapForReload refuses a reload that would move a webhook URL
 // onto a destination ID that already carries another endpoint's stored state.
-// A manifest that cannot be read is self-healed: it is warned about and treated
-// as absent, so a local corruption never turns into a stuck configuration.
+// An unreadable manifest cannot prove the old binding and blocks hot reload.
 func rejectDestinationRemapForReload(newCfg *config.Config) error {
 	if newCfg.DataDir == "" {
 		return nil
@@ -1251,32 +1265,19 @@ func rejectDestinationRemapForReload(newCfg *config.Config) error {
 	manifest, found, err := status.LoadDestinationManifest(newCfg.DataDir)
 	if err != nil {
 		log.WithFields(status.DestinationManifestUnreadableFields(newCfg.DataDir, manifest, err)).
-			Warn("Destination manifest unreadable; rewriting it")
-		return nil
+			Warn("Config reload rejected: destination manifest unreadable")
+		return errDestinationRemapRejected
 	}
 	if !found {
 		return nil
 	}
-	diff := status.DiffDestinations(manifest.Destinations, config.DestinationURLHashes(newCfg))
+	diff := status.DiffDestinationManifest(manifest, config.DestinationURLHashes(newCfg))
 	if !diff.HasRemap() {
 		return nil
 	}
 	log.WithFields(status.DestinationRemapLogFields(diff, status.DestinationManifestPath(newCfg.DataDir))).
 		Warn("Config reload rejected: webhook endpoints were remapped onto existing destination IDs")
 	return errDestinationRemapRejected
-}
-
-// writeDestinationManifestAfterReload records the endpoint-to-ID binding of the
-// configuration that was just applied. A write failure is a WARN: the manifest
-// must never stop delivery.
-func (s *Scheduler) writeDestinationManifestAfterReload(cfg *config.Config) {
-	if s.dryRun || cfg.DataDir == "" {
-		return
-	}
-	if err := status.WriteDestinationManifest(cfg.DataDir, config.DestinationURLHashes(cfg)); err != nil {
-		log.WithError(err).WithField("manifest", status.DestinationManifestPath(cfg.DataDir)).
-			Warn("Failed to write the destination manifest after config reload")
-	}
 }
 
 func auditConfigReloadChanges(oldCfg, newCfg *config.Config) {

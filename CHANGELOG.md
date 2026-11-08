@@ -10,6 +10,7 @@
 
 ### Improved
 
+- Destination IDs retain their webhook hash after an endpoint is removed. Re-adding a different webhook at that position now requires explicit `--accept-destination-remap`, including when removal and re-addition happen across separate starts. Missing or unreadable manifests with status history are handled conservatively, and a failed manifest write stops startup or hot reload before a new endpoint can send.
 - A cancellation or expired deadline before a webhook sender starts no longer creates or consumes a retry attempt. Requests already handed to a sender still count toward the configured attempt limit.
 - Successful API sends complete the delivery audit write attempt before marking an item sent, so concurrent status saves cannot get ahead of an in-progress audit write.
 - HTML-derived alert text removes invisible word joiners and soft hyphens. An RSS item identified only by its title may be delivered once more after the upgrade if its title contained either character.

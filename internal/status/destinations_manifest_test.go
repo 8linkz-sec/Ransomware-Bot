@@ -381,6 +381,25 @@ func TestDestinationManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDestinationManifestRejectsTwoStartLaundering(t *testing.T) {
+	dataDir := t.TempDir()
+	first := map[string]string{"discord.ransomware": hashA, "discord.ransomware.2": hashB}
+	if err := WriteDestinationManifest(dataDir, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteDestinationManifest(dataDir, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, found, err := LoadDestinationManifest(dataDir)
+	if err != nil || !found {
+		t.Fatalf("LoadDestinationManifest() = found %v, err %v", found, err)
+	}
+	reordered := map[string]string{"discord.ransomware": hashB, "discord.ransomware.2": hashA}
+	if diff := DiffDestinationManifest(manifest, reordered); !diff.HasRemap() {
+		t.Fatalf("re-added swapped endpoints escaped remap guard: %+v", diff)
+	}
+}
+
 func TestLoadDestinationManifestMissingFileIsNotAnError(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -602,8 +621,8 @@ func TestDestinationManifestUnreadableFieldsNamesTheReason(t *testing.T) {
 		t.Fatalf("reason = %q, want the load error", reason)
 	}
 	consequence, _ := fields["consequence"].(string)
-	if !strings.Contains(consequence, "endpoint-order check is skipped") {
-		t.Fatalf("consequence = %q, want the skipped-check sentence", consequence)
+	if !strings.Contains(consequence, "new destination IDs require explicit acceptance") {
+		t.Fatalf("consequence = %q, want the uncertainty sentence", consequence)
 	}
 
 	// A parse failure carries no version, so the field must be absent.

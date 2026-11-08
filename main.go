@@ -209,12 +209,12 @@ func runCheckConfig(opts cliOptions, out io.Writer, msg i18n.Messages) int {
 	// The only --check-config outcome that depends on data_dir state rather
 	// than on the config files alone.
 	diff, pending, manifestSkipped := pendingDestinationRemap(cfg, resolved)
+	if manifestSkipped != nil {
+		fmt.Fprintln(out, msg.Tf("cli.config_warning_manifest_unreadable", manifestSkipped.Error()))
+	}
 	if pending {
 		printDestinationRemap(out, msg, diff, status.DestinationManifestPath(resolved))
 		return 1
-	}
-	if manifestSkipped != nil {
-		fmt.Fprintln(out, msg.Tf("cli.config_warning_manifest_unreadable", manifestSkipped.Error()))
 	}
 	if enabledDeliveryTargets(cfg) == 0 {
 		fmt.Fprintln(out, msg.T("cli.config_warning_no_targets"))
@@ -281,8 +281,8 @@ func runConfiguredScheduler(cfg *config.Config, opts cliOptions) int {
 }
 
 // applyDestinationManifest compares the webhook endpoints of cfg against
-// destinations.json in data_dir and refuses the start when an existing
-// destination ID now points at a different webhook URL. Returns the process
+// destinations.json in data_dir and refuses the start when a destination ID
+// has a changed or unknowable previous webhook binding. Returns the process
 // exit code: 1 for a refusal, 0 otherwise.
 //
 // Destination IDs are positional, and dedup markers, retry-queue rows and dead
@@ -297,15 +297,14 @@ func applyDestinationManifest(cfg *config.Config, opts cliOptions, out io.Writer
 
 	manifest, found, err := status.LoadDestinationManifest(cfg.DataDir)
 	if err != nil {
-		// Self-healing: the bot owns this file and nothing in it is
-		// irreplaceable, so a corruption must not become an outage.
 		log.WithFields(status.DestinationManifestUnreadableFields(cfg.DataDir, manifest, err)).
-			Warn("Destination manifest unreadable; rewriting it")
-		found = false
+			Warn("Destination manifest unreadable; accepting new bindings requires explicit operator approval")
+		fmt.Fprintln(out, msg.Tf("cli.config_warning_manifest_unreadable", err.Error()))
+		found = true
 	}
 
 	if found {
-		diff := status.DiffDestinations(manifest.Destinations, current)
+		diff := status.DiffDestinationManifest(manifest, current)
 		if diff.HasRemap() {
 			fields := status.DestinationRemapLogFields(diff, manifestPath)
 			if !opts.acceptDestinationRemap {
@@ -327,8 +326,8 @@ func applyDestinationManifest(cfg *config.Config, opts cliOptions, out io.Writer
 	}
 	if err := status.WriteDestinationManifest(cfg.DataDir, current); err != nil {
 		log.WithError(err).WithField("manifest", manifestPath).
-			Warn("Failed to write the destination manifest")
-		return 0
+			Error("Failed to write the destination manifest; refusing to start")
+		return 1
 	}
 	log.WithFields(log.Fields{
 		"manifest":     manifestPath,
@@ -352,12 +351,13 @@ func pendingDestinationRemap(cfg *config.Config, dataDir string) (diff status.De
 	}
 	manifest, found, err := status.LoadDestinationManifest(dataDir)
 	if err != nil {
-		return status.DestinationDiff{}, false, err
+		diff = status.DiffDestinationManifest(manifest, config.DestinationURLHashes(cfg))
+		return diff, diff.HasRemap(), err
 	}
 	if !found {
 		return status.DestinationDiff{}, false, nil
 	}
-	diff = status.DiffDestinations(manifest.Destinations, config.DestinationURLHashes(cfg))
+	diff = status.DiffDestinationManifest(manifest, config.DestinationURLHashes(cfg))
 	if !diff.HasRemap() {
 		return status.DestinationDiff{}, false, nil
 	}
@@ -897,8 +897,12 @@ func runHealthcheckWithMessages(configDir, dataDirFlag string, out io.Writer, ms
 	// where it is printed, near the other health.* summary lines below.
 	diff, pending, manifestSkipped := pendingDestinationRemap(cfg, resolved)
 	if pending {
-		return fmt.Errorf(msg.T("health.destination_remap"),
+		remapErr := fmt.Errorf(msg.T("health.destination_remap"),
 			destinationRemapKindText(msg, diff), diff.Movements())
+		if manifestSkipped != nil {
+			return fmt.Errorf("%s: %w", strings.TrimSpace(msg.Tf("health.destination_manifest_unreadable", manifestSkipped.Error())), remapErr)
+		}
+		return remapErr
 	}
 	if err := checkReadinessMarkerWithMessages(out, msg); err != nil {
 		return err

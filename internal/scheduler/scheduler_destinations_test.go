@@ -140,6 +140,38 @@ func TestApplyReloadedConfigRejectsDestinationRemap(t *testing.T) {
 	}
 }
 
+func TestApplyReloadedConfigRejectsTwoStartDestinationLaundering(t *testing.T) {
+	dataDir := t.TempDir()
+	initial := destinationReloadConfig(dataDir, destinationURLA, destinationURLB)
+	if err := status.WriteDestinationManifest(dataDir, config.DestinationURLHashes(initial)); err != nil {
+		t.Fatal(err)
+	}
+	deps, _, _ := newFakeDependenciesForTest(initial, &recordingConfigReloader{})
+	s, err := NewWithDependencies(initial, t.TempDir(), false, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := destinationReloadConfig(dataDir)
+	if changed, err := s.applyReloadedConfig(removed); err != nil || !changed {
+		t.Fatalf("removal reload = changed %v, err %v", changed, err)
+	}
+	manifest, found, err := status.LoadDestinationManifest(dataDir)
+	if err != nil || !found || len(manifest.Retired) != 4 {
+		t.Fatalf("removed manifest = %+v, found %v, err %v", manifest, found, err)
+	}
+	swapped := destinationReloadConfig(dataDir, destinationURLB, destinationURLA)
+	if changed, err := s.applyReloadedConfig(swapped); !errors.Is(err, errDestinationRemapRejected) || changed {
+		t.Fatalf("swapped reload = changed %v, err %v; want rejected", changed, err)
+	}
+	if got := config.DestinationURLHashes(s.getConfig()); len(got) != 0 {
+		t.Fatalf("rejected reload changed active endpoints: %v", got)
+	}
+	still, _, err := status.LoadDestinationManifest(dataDir)
+	if err != nil || !reflect.DeepEqual(still.Retired, manifest.Retired) {
+		t.Fatalf("rejected reload changed tombstones: before %+v, after %+v, err %v", manifest, still, err)
+	}
+}
+
 func assertRemapRejectionLog(t *testing.T, hook *logtest.Hook) {
 	t.Helper()
 	entry := findTestLogEntry(hook, "Config reload rejected: webhook endpoints were remapped onto existing destination IDs")
@@ -242,7 +274,7 @@ func TestApplyReloadedConfigSkipsManifestWhenDataDirEmpty(t *testing.T) {
 	}
 }
 
-func TestApplyReloadedConfigWarnsWhenManifestWriteFails(t *testing.T) {
+func TestApplyReloadedConfigRejectsWhenManifestWriteFails(t *testing.T) {
 	hook := logtest.NewGlobal()
 	defer hook.Reset()
 
@@ -251,8 +283,8 @@ func TestApplyReloadedConfigWarnsWhenManifestWriteFails(t *testing.T) {
 	if err := os.WriteFile(dataDir, []byte("not a directory"), 0600); err != nil {
 		t.Fatalf("WriteFile(dataDir) error = %v", err)
 	}
-	cfg := destinationReloadConfig(dataDir, destinationURLA)
-	newCfg := destinationReloadConfig(dataDir, destinationURLA, destinationURLB)
+	cfg := destinationReloadConfig(dataDir)
+	newCfg := destinationReloadConfig(dataDir)
 
 	deps, _, _ := newFakeDependenciesForTest(cfg, &recordingConfigReloader{cfg: newCfg, changed: true})
 	s, err := NewWithDependencies(cfg, t.TempDir(), false, deps)
@@ -261,15 +293,15 @@ func TestApplyReloadedConfigWarnsWhenManifestWriteFails(t *testing.T) {
 	}
 
 	changed, err := s.applyReloadedConfig(newCfg)
-	if err != nil || !changed {
-		t.Fatalf("applyReloadedConfig() = (%v, %v), want (true, nil); a manifest write must never stop a reload", changed, err)
+	if err == nil || changed {
+		t.Fatalf("applyReloadedConfig() = (%v, %v), want (false, error) before config swap", changed, err)
 	}
-	entry := findTestLogEntry(hook, "Failed to write the destination manifest after config reload")
+	entry := findTestLogEntry(hook, "Config reload rejected: destination manifest write failed")
 	if entry == nil {
-		t.Fatalf("missing manifest write WARN; entries=%v", allTestLogMessages(hook))
+		t.Fatalf("missing manifest write ERROR; entries=%v", allTestLogMessages(hook))
 	}
-	if entry.Level != log.WarnLevel {
-		t.Fatalf("manifest write failure level = %v, want warn", entry.Level)
+	if entry.Level != log.ErrorLevel {
+		t.Fatalf("manifest write failure level = %v, want error", entry.Level)
 	}
 }
 
@@ -368,7 +400,7 @@ func allTestLogMessages(hook *logtest.Hook) []string {
 	return messages
 }
 
-func TestApplyReloadedConfigSelfHealsUnknownManifestVersion(t *testing.T) {
+func TestApplyReloadedConfigRejectsUnknownManifestVersion(t *testing.T) {
 	hook := logtest.NewGlobal()
 	defer hook.Reset()
 
@@ -378,8 +410,7 @@ func TestApplyReloadedConfigSelfHealsUnknownManifestVersion(t *testing.T) {
 		t.Fatalf("WriteFile(manifest) error = %v", err)
 	}
 	cfg := destinationReloadConfig(dataDir, destinationURLA)
-	// A rotation that would normally be rejected: with an unusable manifest the
-	// check is skipped for this reload and the file is rewritten.
+	// The old binding is unknowable, so a rotation cannot be applied.
 	newCfg := destinationReloadConfig(dataDir, destinationURLB)
 
 	deps, _, _ := newFakeDependenciesForTest(cfg, &recordingConfigReloader{cfg: newCfg, changed: true})
@@ -389,13 +420,13 @@ func TestApplyReloadedConfigSelfHealsUnknownManifestVersion(t *testing.T) {
 	}
 
 	changed, err := s.applyReloadedConfig(newCfg)
-	if err != nil || !changed {
-		t.Fatalf("applyReloadedConfig() = (%v, %v), want (true, nil)", changed, err)
+	if err == nil || changed {
+		t.Fatalf("applyReloadedConfig() = (%v, %v), want (false, error)", changed, err)
 	}
 
-	entry := findTestLogEntry(hook, "Destination manifest unreadable; rewriting it")
+	entry := findTestLogEntry(hook, "Config reload rejected: destination manifest unreadable")
 	if entry == nil {
-		t.Fatalf("missing self-heal WARN; entries=%v", allTestLogMessages(hook))
+		t.Fatalf("missing reload refusal WARN; entries=%v", allTestLogMessages(hook))
 	}
 	if entry.Level != log.WarnLevel {
 		t.Fatalf("self-heal level = %v, want warn", entry.Level)
@@ -405,11 +436,8 @@ func TestApplyReloadedConfigSelfHealsUnknownManifestVersion(t *testing.T) {
 	}
 
 	manifest, found, err := status.LoadDestinationManifest(dataDir)
-	if err != nil || !found {
-		t.Fatalf("LoadDestinationManifest() = found %v, err %v; the manifest must be rewritten", found, err)
-	}
-	if !reflect.DeepEqual(manifest.Destinations, config.DestinationURLHashes(newCfg)) {
-		t.Fatalf("manifest = %v, want the new config hashes", manifest.Destinations)
+	if err == nil || found || manifest.Version != 99 {
+		t.Fatalf("LoadDestinationManifest() = %+v, found %v, err %v; old manifest must remain", manifest, found, err)
 	}
 }
 
