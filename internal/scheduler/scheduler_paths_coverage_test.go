@@ -913,8 +913,12 @@ func TestSendRSSEntryToTargetReportsSenderFailure(t *testing.T) {
 	if s.statusTracker.IsRSSItemSentToDestination(item.key, target.destinationID, target.url) {
 		t.Fatal("failed delivery was marked sent")
 	}
-	if queued := s.statusTracker.GetRetryItemsByType(status.RetryItemTypeRSS.String()); len(queued) != 1 {
+	queued := s.statusTracker.GetRetryItemsByType(status.RetryItemTypeRSS.String())
+	if len(queued) != 1 {
 		t.Fatalf("queued retries = %d, want 1", len(queued))
+	}
+	if got := queued[0].DestinationID; got != target.destinationID {
+		t.Fatalf("retry destination = %q, want %q", got, target.destinationID)
 	}
 }
 

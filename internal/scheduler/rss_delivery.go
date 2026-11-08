@@ -66,19 +66,7 @@ func (s *Scheduler) sendRSSEntryToTarget(
 		return rssDeliveryOutcomeAlreadySent
 	}
 	if s.isRSSItemSentToWebhook(rss.GenerateEntryContentSignatureLookupKeys(item.entry), destinationID, target.url) {
-		if !s.dryRun {
-			markRSSItemDedupedForDestination(s.statusTracker, item.key, item.title, item.feedTitle, destinationID, target.url)
-			s.persistStatus("rss item already sent")
-		}
-		s.recordRSSDeliveryAuditEvent(
-			item,
-			feedType,
-			target,
-			mode,
-			status.DeliveryAuditOutcomeDeduplicated,
-			status.DeliveryAuditReasonAlreadySent,
-			map[string]string{"dedupe_key_type": "content_signature"},
-		)
+		s.recordRSSContentSignatureDedup(item, feedType, target, mode)
 		return rssDeliveryOutcomeAlreadySent
 	}
 
@@ -205,6 +193,27 @@ func (s *Scheduler) sendRSSEntryToTarget(
 	s.statusTracker.RemoveFromRetryQueueByDestination(item.key, destinationID, target.url)
 	s.persistStatus("rss item delivered")
 	return rssDeliveryOutcomeSent
+}
+
+func (s *Scheduler) recordRSSContentSignatureDedup(
+	item rssDeliveryItem,
+	feedType string,
+	target webhookTarget,
+	mode rssDeliveryMode,
+) {
+	if !s.dryRun {
+		markRSSItemDedupedForDestination(s.statusTracker, item.key, item.title, item.feedTitle, targetDestinationID(target), target.url)
+		s.persistStatus("rss item already sent")
+	}
+	s.recordRSSDeliveryAuditEvent(
+		item,
+		feedType,
+		target,
+		mode,
+		status.DeliveryAuditOutcomeDeduplicated,
+		status.DeliveryAuditReasonAlreadySent,
+		map[string]string{"dedupe_key_type": "content_signature"},
+	)
 }
 
 func (s *Scheduler) rssSendFailureOutcome(
