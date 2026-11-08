@@ -278,13 +278,18 @@ func TestApplyReloadedConfigRejectsWhenManifestWriteFails(t *testing.T) {
 	hook := logtest.NewGlobal()
 	defer hook.Reset()
 
-	// A regular file cannot hold a manifest, so ensurePrivateDataDir fails fast.
-	dataDir := filepath.Join(t.TempDir(), "data-is-a-file")
-	if err := os.WriteFile(dataDir, []byte("not a directory"), 0600); err != nil {
-		t.Fatalf("WriteFile(dataDir) error = %v", err)
+	dataDir := t.TempDir()
+	cfg := destinationReloadConfig(dataDir, destinationURLA)
+	newCfg := destinationReloadConfig(dataDir, destinationURLA, destinationURLB)
+	oldHashes := config.DestinationURLHashes(cfg)
+	if err := status.WriteDestinationManifest(dataDir, oldHashes); err != nil {
+		t.Fatal(err)
 	}
-	cfg := destinationReloadConfig(dataDir)
-	newCfg := destinationReloadConfig(dataDir)
+	// The atomic writer uses destinations.json.tmp. A nonempty directory at
+	// that path fails its write on both Unix and Windows after a valid load.
+	if err := os.MkdirAll(status.DestinationManifestPath(dataDir)+".tmp"+string(os.PathSeparator)+"content", 0700); err != nil {
+		t.Fatal(err)
+	}
 
 	deps, _, _ := newFakeDependenciesForTest(cfg, &recordingConfigReloader{cfg: newCfg, changed: true})
 	s, err := NewWithDependencies(cfg, t.TempDir(), false, deps)
@@ -295,6 +300,16 @@ func TestApplyReloadedConfigRejectsWhenManifestWriteFails(t *testing.T) {
 	changed, err := s.applyReloadedConfig(newCfg)
 	if err == nil || changed {
 		t.Fatalf("applyReloadedConfig() = (%v, %v), want (false, error) before config swap", changed, err)
+	}
+	if !strings.Contains(err.Error(), "failed to write temporary destination manifest file") {
+		t.Fatalf("applyReloadedConfig() error = %v, want actual atomic-writer failure", err)
+	}
+	if got := config.DestinationURLHashes(s.getConfig()); !reflect.DeepEqual(got, oldHashes) {
+		t.Fatalf("rejected reload changed active endpoints: %v, want %v", got, oldHashes)
+	}
+	manifest, found, loadErr := status.LoadDestinationManifest(dataDir)
+	if loadErr != nil || !found || !reflect.DeepEqual(manifest.Destinations, oldHashes) {
+		t.Fatalf("failed write changed manifest: %+v, found %v, err %v", manifest, found, loadErr)
 	}
 	entry := findTestLogEntry(hook, "Config reload rejected: destination manifest write failed")
 	if entry == nil {
