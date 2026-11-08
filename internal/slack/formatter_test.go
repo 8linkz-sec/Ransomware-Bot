@@ -1334,29 +1334,50 @@ func firstBlockContaining(blocks []slackBlock, text string) int {
 func assertSlackTextLimits(t *testing.T, blocks []slackBlock) {
 	t.Helper()
 	for _, block := range blocks {
-		if block.Text != nil {
-			limit := 3000
-			if block.Type == "header" {
-				limit = 150
-			}
-			if length := len([]rune(block.Text.Text)); length > limit {
-				t.Fatalf("%s block text length = %d, want <= %d", block.Type, length, limit)
-			}
+		assertSlackBlockTextLimit(t, block)
+		assertSlackBlockFieldLimits(t, block)
+		assertSlackBlockElementLimits(t, block)
+		assertSlackBlockButtonURLLimit(t, block)
+	}
+}
+
+func assertSlackBlockTextLimit(t *testing.T, block slackBlock) {
+	t.Helper()
+	if block.Text == nil {
+		return
+	}
+	limit := 3000
+	if block.Type == "header" {
+		limit = 150
+	}
+	if length := len([]rune(block.Text.Text)); length > limit {
+		t.Fatalf("%s block text length = %d, want <= %d", block.Type, length, limit)
+	}
+}
+
+func assertSlackBlockFieldLimits(t *testing.T, block slackBlock) {
+	t.Helper()
+	for _, field := range block.Fields {
+		if length := len([]rune(field.Text)); length > 2000 {
+			t.Fatalf("%s block field length = %d, want <= 2000", block.Type, length)
 		}
-		for _, field := range block.Fields {
-			if length := len([]rune(field.Text)); length > 2000 {
-				t.Fatalf("%s block field length = %d, want <= 2000", block.Type, length)
-			}
+	}
+}
+
+func assertSlackBlockElementLimits(t *testing.T, block slackBlock) {
+	t.Helper()
+	for _, element := range block.Elements {
+		if length := len([]rune(element.Text)); length > 3000 {
+			t.Fatalf("%s block element length = %d, want <= 3000", block.Type, length)
 		}
-		for _, element := range block.Elements {
-			if length := len([]rune(element.Text)); length > 3000 {
-				t.Fatalf("%s block element length = %d, want <= 3000", block.Type, length)
-			}
-		}
-		if button, ok := block.Accessory.(slackButtonAccessory); ok {
-			if length := len([]rune(button.URL)); length > 3000 {
-				t.Fatalf("%s block button URL length = %d, want <= 3000", block.Type, length)
-			}
+	}
+}
+
+func assertSlackBlockButtonURLLimit(t *testing.T, block slackBlock) {
+	t.Helper()
+	if button, ok := block.Accessory.(slackButtonAccessory); ok {
+		if length := len([]rune(button.URL)); length > 3000 {
+			t.Fatalf("%s block button URL length = %d, want <= 3000", block.Type, length)
 		}
 	}
 }
@@ -1371,7 +1392,15 @@ func fieldLabels(block slackBlock) []string {
 	return labels
 }
 
-//nolint:gocyclo // permutation-driven assertions over field order; not a table split candidate
+type ransomwareFieldOrderCase struct {
+	name                    string
+	fieldOrder              []string
+	wantBlocks              int
+	wantFields              map[int][]string
+	wantText, wantValue     map[int]string
+	wantFooter, notInFooter string
+}
+
 func TestFormatRansomwareMessageFieldOrderPermutations(t *testing.T) {
 	entry := api.RansomwareEntry{
 		Group: "LockBit", Victim: "Example Corp", Country: "US", Activity: "Manufacturing",
@@ -1379,14 +1408,7 @@ func TestFormatRansomwareMessageFieldOrderPermutations(t *testing.T) {
 		ClaimURL: "https://example.onion/post", Description: "Incident description",
 		Discovered: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), AttackDate: "2026-01-01",
 	}
-	tests := []struct {
-		name                    string
-		fieldOrder              []string
-		wantBlocks              int
-		wantFields              map[int][]string
-		wantText, wantValue     map[int]string
-		wantFooter, notInFooter string
-	}{
+	tests := []ransomwareFieldOrderCase{
 		{name: "shipped top level field order",
 			fieldOrder: []string{"victim", "activity", "country", "website", "group", "discovered", "attack_date", "description", "screenshot", "post_url"},
 			wantBlocks: 8,
@@ -1454,63 +1476,90 @@ func TestFormatRansomwareMessageFieldOrderPermutations(t *testing.T) {
 			}
 
 			msg := formatRansomwareMessage(entry, cfg)
-
-			if len(msg.Blocks) != tc.wantBlocks {
-				t.Errorf("block count = %d, want %d", len(msg.Blocks), tc.wantBlocks)
-			}
-			for idx, want := range tc.wantFields {
-				if idx >= len(msg.Blocks) {
-					t.Fatalf("block %d missing, message has %d blocks", idx, len(msg.Blocks))
-				}
-				got := fieldLabels(msg.Blocks[idx])
-				if strings.Join(got, "|") != strings.Join(want, "|") {
-					t.Errorf("block %d labels = %v, want %v", idx, got, want)
-				}
-			}
-			for idx, want := range tc.wantValue {
-				if idx >= len(msg.Blocks) {
-					t.Fatalf("block %d missing, message has %d blocks", idx, len(msg.Blocks))
-				}
-				if len(msg.Blocks[idx].Fields) == 0 {
-					t.Fatalf("block %d has no fields, want value %q", idx, want)
-				}
-				if !strings.Contains(msg.Blocks[idx].Fields[0].Text, want) {
-					t.Errorf("block %d field 0 = %q, want to contain %q", idx, msg.Blocks[idx].Fields[0].Text, want)
-				}
-			}
-			for idx, want := range tc.wantText {
-				if idx >= len(msg.Blocks) {
-					t.Fatalf("block %d missing, message has %d blocks", idx, len(msg.Blocks))
-				}
-				if msg.Blocks[idx].Text == nil {
-					t.Fatalf("block %d has no text object, want to contain %q", idx, want)
-				}
-				if !strings.Contains(msg.Blocks[idx].Text.Text, want) {
-					t.Errorf("block %d text = %q, want to contain %q", idx, msg.Blocks[idx].Text.Text, want)
-				}
-			}
-
-			last := msg.Blocks[len(msg.Blocks)-1]
-			if last.Type != "context" || len(last.Elements) == 0 {
-				t.Fatalf("last block = %#v, want a context block with elements", last)
-			}
-			if !strings.Contains(last.Elements[0].Text, tc.wantFooter) {
-				t.Errorf("footer = %q, want to contain %q", last.Elements[0].Text, tc.wantFooter)
-			}
-			if tc.notInFooter != "" && strings.Contains(last.Elements[0].Text, tc.notInFooter) {
-				t.Errorf("footer = %q, want not to contain %q", last.Elements[0].Text, tc.notInFooter)
-			}
-
-			assertSlackTextLimits(t, msg.Blocks)
-			if len(msg.Blocks) > 50 {
-				t.Errorf("block count = %d, want <= 50", len(msg.Blocks))
-			}
-			for i, b := range msg.Blocks {
-				if len(b.Fields) > 10 {
-					t.Errorf("block %d field count = %d, want <= 10", i, len(b.Fields))
-				}
-			}
+			assertRansomwareFieldOrderCase(t, msg.Blocks, tc)
 		})
+	}
+}
+
+func assertRansomwareFieldOrderCase(t *testing.T, blocks []slackBlock, tc ransomwareFieldOrderCase) {
+	t.Helper()
+	if len(blocks) != tc.wantBlocks {
+		t.Errorf("block count = %d, want %d", len(blocks), tc.wantBlocks)
+	}
+	assertRansomwareFieldLabels(t, blocks, tc.wantFields)
+	assertRansomwareFieldValues(t, blocks, tc.wantValue)
+	assertRansomwareTextBlocks(t, blocks, tc.wantText)
+	assertRansomwareFieldOrderFooter(t, blocks, tc.wantFooter, tc.notInFooter)
+	assertSlackTextLimits(t, blocks)
+	assertSlackBlockAndFieldCounts(t, blocks)
+}
+
+func assertRansomwareFieldLabels(t *testing.T, blocks []slackBlock, wantFields map[int][]string) {
+	t.Helper()
+	for idx, want := range wantFields {
+		if idx >= len(blocks) {
+			t.Fatalf("block %d missing, message has %d blocks", idx, len(blocks))
+		}
+		got := fieldLabels(blocks[idx])
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("block %d labels = %v, want %v", idx, got, want)
+		}
+	}
+}
+
+func assertRansomwareFieldValues(t *testing.T, blocks []slackBlock, wantValues map[int]string) {
+	t.Helper()
+	for idx, want := range wantValues {
+		if idx >= len(blocks) {
+			t.Fatalf("block %d missing, message has %d blocks", idx, len(blocks))
+		}
+		if len(blocks[idx].Fields) == 0 {
+			t.Fatalf("block %d has no fields, want value %q", idx, want)
+		}
+		if !strings.Contains(blocks[idx].Fields[0].Text, want) {
+			t.Errorf("block %d field 0 = %q, want to contain %q", idx, blocks[idx].Fields[0].Text, want)
+		}
+	}
+}
+
+func assertRansomwareTextBlocks(t *testing.T, blocks []slackBlock, wantTexts map[int]string) {
+	t.Helper()
+	for idx, want := range wantTexts {
+		if idx >= len(blocks) {
+			t.Fatalf("block %d missing, message has %d blocks", idx, len(blocks))
+		}
+		if blocks[idx].Text == nil {
+			t.Fatalf("block %d has no text object, want to contain %q", idx, want)
+		}
+		if !strings.Contains(blocks[idx].Text.Text, want) {
+			t.Errorf("block %d text = %q, want to contain %q", idx, blocks[idx].Text.Text, want)
+		}
+	}
+}
+
+func assertRansomwareFieldOrderFooter(t *testing.T, blocks []slackBlock, wantFooter, notInFooter string) {
+	t.Helper()
+	last := blocks[len(blocks)-1]
+	if last.Type != "context" || len(last.Elements) == 0 {
+		t.Fatalf("last block = %#v, want a context block with elements", last)
+	}
+	if !strings.Contains(last.Elements[0].Text, wantFooter) {
+		t.Errorf("footer = %q, want to contain %q", last.Elements[0].Text, wantFooter)
+	}
+	if notInFooter != "" && strings.Contains(last.Elements[0].Text, notInFooter) {
+		t.Errorf("footer = %q, want not to contain %q", last.Elements[0].Text, notInFooter)
+	}
+}
+
+func assertSlackBlockAndFieldCounts(t *testing.T, blocks []slackBlock) {
+	t.Helper()
+	if len(blocks) > 50 {
+		t.Errorf("block count = %d, want <= 50", len(blocks))
+	}
+	for i, block := range blocks {
+		if len(block.Fields) > 10 {
+			t.Errorf("block %d field count = %d, want <= 10", i, len(block.Fields))
+		}
 	}
 }
 
