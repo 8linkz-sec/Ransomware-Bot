@@ -655,8 +655,8 @@ func (s *Scheduler) sendAPIEntryToTarget(ctx context.Context, cfg *config.Config
 		}, err)
 		return false
 	}
-	markAPIItemSentForDestination(s.statusTracker, key, title, target.destinationID, target.url)
 	s.recordAPIDeliveryAuditEvent(entry, target, status.DeliveryAuditOutcomeDelivered, "", nil)
+	markAPIItemSentForDestination(s.statusTracker, key, title, target.destinationID, target.url)
 	s.statusTracker.RemoveFromRetryQueueByDestination(key, target.destinationID, target.url)
 	s.persistStatus("api item delivered")
 	return true
@@ -1031,7 +1031,6 @@ func (s *Scheduler) processAPIRetryJob(
 		return true
 	}
 
-	markAPIItemSentForDestination(s.statusTracker, job.primaryKey, job.title, job.destinationID, job.webhook.url)
 	s.recordAPIRetryAuditEvent(
 		item,
 		job.destinationID,
@@ -1039,6 +1038,7 @@ func (s *Scheduler) processAPIRetryJob(
 		status.DeliveryAuditReasonRetrySuccess,
 		nil,
 	)
+	markAPIItemSentForDestination(s.statusTracker, job.primaryKey, job.title, job.destinationID, job.webhook.url)
 	s.statusTracker.RemoveRetryQueueEntry(job.queueKey)
 	s.persistStatus("api retry job delivered")
 	markChanged()
