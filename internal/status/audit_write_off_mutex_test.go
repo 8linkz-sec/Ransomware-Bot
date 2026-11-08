@@ -223,7 +223,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "cleanupOldEntries",
 			setup: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest(RetryRequest{
+				mustEnqueueAuditRetry(t, tracker, RetryRequest{
 					ItemKey:       "old-1",
 					DestinationID: "discord.a",
 					Messenger:     Messenger("discord"),
@@ -232,10 +232,8 @@ func sixEntryPointCases() []sixEntryPointCase {
 					LastError:     "boom",
 					MaxAttempts:   5,
 					RetryWindow:   24 * time.Hour,
-				}) {
-					t.Fatal("setup EnqueueRetry() failed")
-				}
-				if !tracker.enqueueRetryForTest(RetryRequest{
+				}, "setup EnqueueRetry() failed")
+				mustEnqueueAuditRetry(t, tracker, RetryRequest{
 					ItemKey:       "new-1",
 					DestinationID: "discord.b",
 					Messenger:     Messenger("discord"),
@@ -244,9 +242,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 					LastError:     "boom",
 					MaxAttempts:   5,
 					RetryWindow:   24 * time.Hour,
-				}) {
-					t.Fatal("setup EnqueueRetry() failed")
-				}
+				}, "setup EnqueueRetry() failed")
 				oldTime := formatStatusTimestamp(statusNow().Add(-time.Hour))
 				if !tracker.setQueuedRetryTimes("old-1", "api", oldTime, oldTime) {
 					t.Fatal("setup setQueuedRetryTimes() failed")
@@ -262,7 +258,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "cleanupOldRSSEntries",
 			setup: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest(RetryRequest{
+				mustEnqueueAuditRetry(t, tracker, RetryRequest{
 					ItemKey:       "old-2",
 					DestinationID: "discord.a",
 					Messenger:     Messenger("discord"),
@@ -271,10 +267,8 @@ func sixEntryPointCases() []sixEntryPointCase {
 					LastError:     "boom",
 					MaxAttempts:   5,
 					RetryWindow:   24 * time.Hour,
-				}) {
-					t.Fatal("setup EnqueueRetry() failed")
-				}
-				if !tracker.enqueueRetryForTest(RetryRequest{
+				}, "setup EnqueueRetry() failed")
+				mustEnqueueAuditRetry(t, tracker, RetryRequest{
 					ItemKey:       "new-2",
 					DestinationID: "discord.b",
 					Messenger:     Messenger("discord"),
@@ -283,9 +277,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 					LastError:     "boom",
 					MaxAttempts:   5,
 					RetryWindow:   24 * time.Hour,
-				}) {
-					t.Fatal("setup EnqueueRetry() failed")
-				}
+				}, "setup EnqueueRetry() failed")
 				oldTime := formatStatusTimestamp(statusNow().Add(-time.Hour))
 				if !tracker.setQueuedRetryTimes("old-2", "rss", oldTime, oldTime) {
 					t.Fatal("setup setQueuedRetryTimes() failed")
@@ -301,7 +293,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "EnqueueRetryForDestination",
 			call: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest(RetryRequest{
+				mustEnqueueAuditRetry(t, tracker, RetryRequest{
 					ItemKey:       "item-enqueue",
 					DestinationID: "discord.c",
 					Messenger:     Messenger("discord"),
@@ -310,9 +302,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 					LastError:     "boom",
 					MaxAttempts:   5,
 					RetryWindow:   time.Hour,
-				}) {
-					t.Fatal("EnqueueRetry() unexpectedly failed")
-				}
+				}, "EnqueueRetry() unexpectedly failed")
 			},
 			outcome: DeliveryAuditOutcomeRetryQueued,
 		},
@@ -320,7 +310,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "RecordRetryQueueFailureWithErrorInfo",
 			setup: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest(RetryRequest{
+				mustEnqueueAuditRetry(t, tracker, RetryRequest{
 					ItemKey:       "item-fail",
 					DestinationID: "discord.d",
 					Messenger:     Messenger("discord"),
@@ -329,9 +319,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 					LastError:     "boom",
 					MaxAttempts:   1,
 					RetryWindow:   0,
-				}) {
-					t.Fatal("setup EnqueueRetry() failed")
-				}
+				}, "setup EnqueueRetry() failed")
 			},
 			call: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
@@ -346,7 +334,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 			name: "DeadLetterRetryQueueEntryWithErrorInfo",
 			setup: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
-				if !tracker.enqueueRetryForTest(RetryRequest{
+				mustEnqueueAuditRetry(t, tracker, RetryRequest{
 					ItemKey:       "item-dl",
 					DestinationID: "discord.e",
 					Messenger:     Messenger("discord"),
@@ -355,9 +343,7 @@ func sixEntryPointCases() []sixEntryPointCase {
 					LastError:     "boom",
 					MaxAttempts:   5,
 					RetryWindow:   time.Hour,
-				}) {
-					t.Fatal("setup EnqueueRetry() failed")
-				}
+				}, "setup EnqueueRetry() failed")
 			},
 			call: func(t *testing.T, tracker *Tracker) {
 				t.Helper()
@@ -381,6 +367,13 @@ func sixEntryPointCases() []sixEntryPointCase {
 	}
 }
 
+func mustEnqueueAuditRetry(t *testing.T, tracker *Tracker, request RetryRequest, failure string) {
+	t.Helper()
+	if !tracker.enqueueRetryForTest(request) {
+		t.Fatal(failure)
+	}
+}
+
 // TestSixEntryPointsFlushAfterUnlock is the per-call-site proof (plan section
 // 7 item 3): for each of the six t.mutex-holding entry points that reaches an
 // audit write, a stalled write must not block a concurrent operation that
@@ -389,57 +382,62 @@ func sixEntryPointCases() []sixEntryPointCase {
 func TestSixEntryPointsFlushAfterUnlock(t *testing.T) {
 	for _, tc := range sixEntryPointCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			policy := DefaultRetentionPolicy()
-			policy.MaxRetryQueueItems = 1 // lets the two cleanup cases force count-based pruning deterministically
-			dir := t.TempDir()
-			tracker, err := NewTrackerWithRetention(dir, policy)
-			if err != nil {
-				t.Fatalf("NewTrackerWithRetention() error = %v", err)
-			}
-			if tc.setup != nil {
-				tc.setup(t, tracker)
-			}
-			// Setup itself may already have written audit lines (e.g. the
-			// queuing calls that build up a case's fixture); only the lines
-			// produced by tc.call matter for this assertion.
-			if err := os.Remove(filepath.Join(dir, statusAuditFileName)); err != nil && !os.IsNotExist(err) {
-				t.Fatalf("Remove(%s) error = %v", statusAuditFileName, err)
-			}
-
-			stall := stallAuditFileOpen(t)
-
-			callDone := make(chan struct{})
-			go func() {
-				defer close(callDone)
-				tc.call(t, tracker)
-			}()
-
-			if !waitOrTimeout(stall.entered, 5*time.Second) {
-				t.Fatal("entry point never reached the stalled audit write")
-			}
-
-			readDone := make(chan struct{})
-			go func() {
-				defer close(readDone)
-				tracker.RSSParsedSortState()
-			}()
-			if !waitOrTimeout(readDone, 1*time.Second) {
-				t.Fatal("concurrent RSSParsedSortState() stayed blocked while the audit write was stalled")
-			}
-
-			stall.release()
-			if !waitOrTimeout(callDone, 5*time.Second) {
-				t.Fatal("entry point did not complete after the stall was released")
-			}
-
-			data, err := os.ReadFile(filepath.Join(dir, statusAuditFileName))
-			if err != nil {
-				t.Fatalf("ReadFile(%s) error = %v", statusAuditFileName, err)
-			}
-			if !strings.Contains(string(data), tc.outcome) {
-				t.Fatalf("delivery_audit.jsonl missing outcome %q: %s", tc.outcome, data)
-			}
+			assertSixEntryPointFlushAfterUnlock(t, tc)
 		})
+	}
+}
+
+func assertSixEntryPointFlushAfterUnlock(t *testing.T, tc sixEntryPointCase) {
+	t.Helper()
+	policy := DefaultRetentionPolicy()
+	policy.MaxRetryQueueItems = 1 // lets the two cleanup cases force count-based pruning deterministically
+	dir := t.TempDir()
+	tracker, err := NewTrackerWithRetention(dir, policy)
+	if err != nil {
+		t.Fatalf("NewTrackerWithRetention() error = %v", err)
+	}
+	if tc.setup != nil {
+		tc.setup(t, tracker)
+	}
+	// Setup itself may already have written audit lines (e.g. the
+	// queuing calls that build up a case's fixture); only the lines
+	// produced by tc.call matter for this assertion.
+	if err := os.Remove(filepath.Join(dir, statusAuditFileName)); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Remove(%s) error = %v", statusAuditFileName, err)
+	}
+
+	stall := stallAuditFileOpen(t)
+
+	callDone := make(chan struct{})
+	go func() {
+		defer close(callDone)
+		tc.call(t, tracker)
+	}()
+
+	if !waitOrTimeout(stall.entered, 5*time.Second) {
+		t.Fatal("entry point never reached the stalled audit write")
+	}
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		tracker.RSSParsedSortState()
+	}()
+	if !waitOrTimeout(readDone, 1*time.Second) {
+		t.Fatal("concurrent RSSParsedSortState() stayed blocked while the audit write was stalled")
+	}
+
+	stall.release()
+	if !waitOrTimeout(callDone, 5*time.Second) {
+		t.Fatal("entry point did not complete after the stall was released")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, statusAuditFileName))
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", statusAuditFileName, err)
+	}
+	if !strings.Contains(string(data), tc.outcome) {
+		t.Fatalf("delivery_audit.jsonl missing outcome %q: %s", tc.outcome, data)
 	}
 }
 
