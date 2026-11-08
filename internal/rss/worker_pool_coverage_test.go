@@ -125,6 +125,7 @@ func TestSubmitFeedJobsReturnsOnContextCancelWhileStillQueuing(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for range pool.results {
+			// Drain only: the results are irrelevant, the test waits for the pool to close the channel.
 		}
 		close(done)
 	}()
