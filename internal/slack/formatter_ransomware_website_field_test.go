@@ -140,7 +140,26 @@ func TestFormatRansomwareMessageWebsiteFallbackRespectsFieldOrderPrecedence(t *t
 		Victim:     "Example Corp",
 		WebsiteURL: "http://lockbitxyz123.onion/example-corp",
 	}
+	testSlackWebsiteOrderDirectRoutes(t, entry)
+	testSlackWebsiteOrderSharedPredecessors(t, entry)
+	testSlackWebsiteOrderRemainingPredecessors(t, entry)
+}
 
+func assertOneWebsiteBlock(t *testing.T, blocks []slackBlock) {
+	t.Helper()
+	count := 0
+	for _, block := range blocks {
+		if containsFieldText([]slackBlock{block}, "Website:") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("website-carrying block count = %d, want exactly 1: %#v", count, blocks)
+	}
+}
+
+func testSlackWebsiteOrderDirectRoutes(t *testing.T, entry api.RansomwareEntry) {
+	t.Helper()
 	t.Run("slack-specific order carries website, generic order does not", func(t *testing.T) {
 		formatCfg := &notifyfmt.FormatOptions{
 			FieldOrder: []string{"group", "victim"},
@@ -151,15 +170,7 @@ func TestFormatRansomwareMessageWebsiteFallbackRespectsFieldOrderPrecedence(t *t
 
 		msg := formatRansomwareMessage(entry, formatCfg)
 
-		count := 0
-		for _, block := range msg.Blocks {
-			if containsFieldText([]slackBlock{block}, "Website:") {
-				count++
-			}
-		}
-		if count != 1 {
-			t.Fatalf("website-carrying block count = %d, want exactly 1: %#v", count, msg.Blocks)
-		}
+		assertOneWebsiteBlock(t, msg.Blocks)
 		if idx := firstBlockContaining(msg.Blocks, "Website:"); idx != 2 {
 			t.Fatalf("Website block index = %d, want 2 (slack-specific position)", idx)
 		}
@@ -172,17 +183,12 @@ func TestFormatRansomwareMessageWebsiteFallbackRespectsFieldOrderPrecedence(t *t
 
 		msg := formatRansomwareMessage(entry, formatCfg)
 
-		count := 0
-		for _, block := range msg.Blocks {
-			if containsFieldText([]slackBlock{block}, "Website:") {
-				count++
-			}
-		}
-		if count != 1 {
-			t.Fatalf("website-carrying block count = %d, want exactly 1: %#v", count, msg.Blocks)
-		}
+		assertOneWebsiteBlock(t, msg.Blocks)
 	})
+}
 
+func testSlackWebsiteOrderSharedPredecessors(t *testing.T, entry api.RansomwareEntry) {
+	t.Helper()
 	// A generic Website position is retained relative to fields shared with
 	// Slack's effective order, even when Slack omits Website explicitly.
 	t.Run("generic order carries website, slack-specific order omits it", func(t *testing.T) {
@@ -195,15 +201,7 @@ func TestFormatRansomwareMessageWebsiteFallbackRespectsFieldOrderPrecedence(t *t
 
 		msg := formatRansomwareMessage(entry, formatCfg)
 
-		count := 0
-		for _, block := range msg.Blocks {
-			if containsFieldText([]slackBlock{block}, "Website:") {
-				count++
-			}
-		}
-		if count != 1 {
-			t.Fatalf("website-carrying block count = %d, want exactly 1: %#v", count, msg.Blocks)
-		}
+		assertOneWebsiteBlock(t, msg.Blocks)
 		if idx := firstBlockContaining(msg.Blocks, "Website:"); idx != 2 {
 			t.Fatalf("Website block index = %d, want 2 (after the shared group and victim fields)", idx)
 		}
@@ -232,7 +230,10 @@ func TestFormatRansomwareMessageWebsiteFallbackRespectsFieldOrderPrecedence(t *t
 			t.Fatalf("field_order mutated: %#v", got)
 		}
 	})
+}
 
+func testSlackWebsiteOrderRemainingPredecessors(t *testing.T, entry api.RansomwareEntry) {
+	t.Helper()
 	t.Run("full-width shared predecessor anchors website after its block", func(t *testing.T) {
 		withPostURL := entry
 		withPostURL.ClaimURL = "https://example.test/claim"
