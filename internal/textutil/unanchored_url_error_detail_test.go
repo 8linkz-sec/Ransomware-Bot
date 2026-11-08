@@ -54,6 +54,23 @@ func TestRedactWebhookSecretsMasksBackslashAndQuoteInParseError(t *testing.T) {
 	}
 }
 
+func TestRedactUnanchoredURLParseErrorDetailsMasksFieldBeforeQuotedFragments(t *testing.T) {
+	raw := "https://svc:PWD\"\"\"/tail@feeds.example.test/rss"
+	err := malformedURLParseErrorForTest(t, raw)
+	got := redactUnanchoredURLParseErrorDetails(err.Error())
+	if want := `parse "[redacted URL]": invalid port "[redacted]" after host`; got != want {
+		t.Fatalf("field or detail retained a credential fragment: got %q, want %q", got, want)
+	}
+}
+
+func TestRedactUnanchoredURLParseErrorDetailsKeepsNormalDiagnostic(t *testing.T) {
+	err := malformedURLParseErrorForTest(t, "https://host.example:bad/path")
+	got := redactUnanchoredURLParseErrorDetails("before: " + err.Error() + "; after")
+	if want := `before: parse "[redacted URL]": invalid port "[redacted]" after host; after`; got != want {
+		t.Fatalf("normal parse diagnostic changed: got %q, want %q", got, want)
+	}
+}
+
 func TestRedactWebhookSecretsMasksUppercaseSchemeParseErrorDetail(t *testing.T) {
 	raw := "HTTPS://svc:PWDKKK\"1/tail@feeds.example.test/rss"
 	err := malformedURLParseErrorForTest(t, raw)

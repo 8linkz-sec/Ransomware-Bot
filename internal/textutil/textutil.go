@@ -627,10 +627,15 @@ func redactUnanchoredURLParseErrorDetails(text string) string {
 			continue
 		}
 		detailEnd := afterQuoted + 2 + len(urlErr.Err.Error())
-		span := redactURLErrorSubstringFragments(text[matchStart:detailEnd], parseErr, rawURL)
-		span = strings.Replace(span, quotedURL[1:len(quotedURL)-1], redactedURLMarker, 1)
+		// Mask the quoted URL field before fragment replacement. A quoted
+		// fragment can also occur inside that field when the malformed port
+		// contains adjacent quotes; changing it first would break an exact
+		// whole-field replacement and leave credential-bearing URL pieces.
 		redacted.WriteString(text[lastCopied:matchStart])
-		redacted.WriteString(span)
+		redacted.WriteString(text[matchStart : quotedStart+1])
+		redacted.WriteString(redactedURLMarker)
+		redacted.WriteString(text[quotedEnd : afterQuoted+2])
+		redacted.WriteString(redactURLErrorSubstringFragments(text[afterQuoted+2:detailEnd], parseErr, rawURL))
 		lastCopied = detailEnd
 		offset = detailEnd
 	}
