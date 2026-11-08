@@ -27,46 +27,14 @@ func TestExecuteWebhookRedactsDecodedSlackCompatibleURLFromResponseBody(t *testi
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hook := logtest.NewGlobal()
-			defer hook.Reset()
 			webhookURL := "https://hooks.eu.example/services/a" + tt.escaped + "b/FAKEPROVIDERTOKEN"
-			sender := newSlackTestSender(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			assertWebhookEchoRedacted(t, webhookURL, "failed for https://hooks.eu.example/services/[redacted]", func(req *http.Request) string {
 				wantPath := "/services/a" + tt.decoded + "b/FAKEPROVIDERTOKEN"
 				if req.URL.Path != wantPath {
 					t.Fatalf("request URL path = %q, want %q", req.URL.Path, wantPath)
 				}
-				decodedURL := req.URL.Scheme + "://" + req.URL.Host + req.URL.Path
-				return &http.Response{
-					StatusCode: http.StatusInternalServerError,
-					Status:     "500 Internal Server Error",
-					Body:       io.NopCloser(strings.NewReader("failed for " + decodedURL)),
-					Header:     make(http.Header),
-				}, nil
-			}))
-
-			err := sendTestSlackRansomware(context.Background(), sender, webhookURL)
-			if err == nil {
-				t.Fatal("expected server error")
-			}
-			foundBody := false
-			for _, entry := range hook.AllEntries() {
-				body, _ := entry.Data["response_body"].(string)
-				if strings.Contains(body, "FAKEPROVIDERTOKEN") {
-					t.Fatalf("response_body log leaked decoded webhook token: %q", body)
-				}
-				if body != "" {
-					if body != "failed for https://hooks.eu.example/services/[redacted]" {
-						t.Fatalf("response_body log = %q", body)
-					}
-					foundBody = true
-				}
-			}
-			if !foundBody {
-				t.Fatal("expected a response_body log entry")
-			}
-			if strings.Contains(err.Error(), "FAKEPROVIDERTOKEN") {
-				t.Fatalf("server error leaked decoded webhook token: %v", err)
-			}
+				return req.URL.Scheme + "://" + req.URL.Host + req.URL.Path
+			})
 		})
 	}
 }
@@ -78,8 +46,22 @@ func TestExecuteWebhookRedactsPathAndQueryEchoFromResponseBody(t *testing.T) {
 		decodedPath  bool
 		decodedQuery bool
 		pathOnly     bool
+		queryOnly    bool
 		want         string
 	}{
+		{
+			name:       "query only raw",
+			webhookURL: "https://hooks.eu.example/public?token=EXTRA%20SECRET",
+			queryOnly:  true,
+			want:       "failed for [redacted]",
+		},
+		{
+			name:         "query only decoded",
+			webhookURL:   "https://hooks.eu.example/public?token=EXTRA%20SECRET",
+			decodedQuery: true,
+			queryOnly:    true,
+			want:         "failed for [redacted]",
+		},
 		{
 			name:        "path only decoded",
 			webhookURL:  "https://hooks.eu.example/services/a%2Fb/FAKEPROVIDERTOKEN",
@@ -160,64 +142,78 @@ func TestExecuteWebhookRedactsPathAndQueryEchoFromResponseBody(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			hook := logtest.NewGlobal()
-			defer hook.Reset()
-			sender := newSlackTestSender(roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				path := req.URL.EscapedPath()
-				if tt.decodedPath {
-					path = req.URL.Path
-				}
-				query := req.URL.RawQuery
-				if tt.decodedQuery {
-					var err error
-					query, err = url.QueryUnescape(query)
-					if err != nil {
-						t.Fatalf("decode request query: %v", err)
-					}
-				}
-				echoed := path
-				if !tt.pathOnly {
-					echoed = req.URL.Scheme + "://" + req.URL.Host + echoed
-				}
-				if req.URL.RawQuery != "" {
-					echoed += "?" + query
-				}
-				return &http.Response{
-					StatusCode: http.StatusInternalServerError,
-					Status:     "500 Internal Server Error",
-					Body:       io.NopCloser(strings.NewReader("failed for " + echoed)),
-					Header:     make(http.Header),
-				}, nil
-			}))
-
-			err := sendTestSlackRansomware(context.Background(), sender, tt.webhookURL)
-			if err == nil {
-				t.Fatal("expected server error")
-			}
-			for _, token := range []string{"FAKEPROVIDERTOKEN", "EXTRA", "SECRET"} {
-				if strings.Contains(err.Error(), token) {
-					t.Fatalf("server error leaked %q: %v", token, err)
-				}
-			}
-			foundBody := false
-			for _, entry := range hook.AllEntries() {
-				body, _ := entry.Data["response_body"].(string)
-				if body == "" {
-					continue
-				}
-				for _, token := range []string{"FAKEPROVIDERTOKEN", "EXTRA", "SECRET"} {
-					if strings.Contains(body, token) {
-						t.Fatalf("response_body log leaked %q: %q", token, body)
-					}
-				}
-				if body != tt.want {
-					t.Fatalf("response_body log = %q, want %q", body, tt.want)
-				}
-				foundBody = true
-			}
-			if !foundBody {
-				t.Fatal("expected a response_body log entry")
-			}
+			assertWebhookEchoRedacted(t, tt.webhookURL, tt.want, func(req *http.Request) string {
+				return buildProviderEcho(t, req, tt.decodedPath, tt.decodedQuery, tt.pathOnly, tt.queryOnly)
+			})
 		})
+	}
+}
+
+func buildProviderEcho(t *testing.T, req *http.Request, decodedPath, decodedQuery, pathOnly, queryOnly bool) string {
+	t.Helper()
+	path := req.URL.EscapedPath()
+	if decodedPath {
+		path = req.URL.Path
+	}
+	query := req.URL.RawQuery
+	if decodedQuery {
+		var err error
+		query, err = url.QueryUnescape(query)
+		if err != nil {
+			t.Fatalf("decode request query: %v", err)
+		}
+	}
+	if queryOnly {
+		return query
+	}
+	if !pathOnly {
+		path = req.URL.Scheme + "://" + req.URL.Host + path
+	}
+	if req.URL.RawQuery != "" {
+		path += "?" + query
+	}
+	return path
+}
+
+func assertWebhookEchoRedacted(t *testing.T, webhookURL, want string, echo func(*http.Request) string) {
+	t.Helper()
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+	sender := newSlackTestSender(roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Status:     "500 Internal Server Error",
+			Body:       io.NopCloser(strings.NewReader("failed for " + echo(req))),
+			Header:     make(http.Header),
+		}, nil
+	}))
+	err := sendTestSlackRansomware(context.Background(), sender, webhookURL)
+	if err == nil {
+		t.Fatal("expected server error")
+	}
+	assertNoWebhookEchoTokens(t, "server error", err.Error())
+	foundBody := false
+	for _, entry := range hook.AllEntries() {
+		body, _ := entry.Data["response_body"].(string)
+		if body == "" {
+			continue
+		}
+		assertNoWebhookEchoTokens(t, "response_body log", body)
+		if body != want {
+			t.Fatalf("response_body log = %q, want %q", body, want)
+		}
+		foundBody = true
+	}
+	if !foundBody {
+		t.Fatal("expected a response_body log entry")
+	}
+}
+
+func assertNoWebhookEchoTokens(t *testing.T, source, value string) {
+	t.Helper()
+	for _, token := range []string{"FAKEPROVIDERTOKEN", "EXTRA", "SECRET"} {
+		if strings.Contains(value, token) {
+			t.Fatalf("%s leaked %q: %q", source, token, value)
+		}
 	}
 }

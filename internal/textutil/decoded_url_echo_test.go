@@ -160,3 +160,41 @@ func TestRedactWebhookSecretsForURLMasksProviderPathOnlyEcho(t *testing.T) {
 		})
 	}
 }
+
+func TestRedactWebhookSecretsForURLKeepsRealHostWithSmuggledAuthorityQuery(t *testing.T) {
+	for _, query := range []string{"trace=EXTRA%20SECRET", "trace=plain"} {
+		raw := "https://TOKENIII/x@host.example.test/rss?" + query
+		for _, echoed := range []string{raw, strconv.Quote(raw)} {
+			got := RedactWebhookSecretsForURL("failed for "+echoed, raw)
+			if strings.Contains(got, "TOKENIII") || strings.Contains(got, "EXTRA") {
+				t.Fatalf("smuggled authority credential leaked: %q", got)
+			}
+			if !strings.Contains(got, "https://host.example.test/[redacted]") {
+				t.Fatalf("real host marker missing: %q", got)
+			}
+		}
+	}
+}
+
+func TestRedactWebhookSecretsForURLMasksProviderQueryOnlyEcho(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured string
+		echoed     string
+	}{
+		{"raw percent query", "https://hooks.eu.example/public?token=EXTRA%20SECRET", "token=EXTRA%20SECRET"},
+		{"decoded percent query", "https://hooks.eu.example/public?token=EXTRA%20SECRET", "token=EXTRA SECRET"},
+		{"decoded plus query", "https://hooks.eu.example/public?token=EXTRA+SECRET", "token=EXTRA SECRET"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RedactWebhookSecretsForURL("failed for "+tt.echoed+" next", tt.configured)
+			if strings.Contains(got, "EXTRA") || strings.Contains(got, "SECRET") {
+				t.Fatalf("query-only webhook echo leaked: %q", got)
+			}
+			if got != "failed for [redacted] next" {
+				t.Fatalf("redacted response = %q", got)
+			}
+		})
+	}
+}
