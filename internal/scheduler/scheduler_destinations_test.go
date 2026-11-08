@@ -140,6 +140,38 @@ func TestApplyReloadedConfigRejectsDestinationRemap(t *testing.T) {
 	}
 }
 
+func TestApplyReloadedConfigRejectsTwoStartDestinationLaundering(t *testing.T) {
+	dataDir := t.TempDir()
+	initial := destinationReloadConfig(dataDir, destinationURLA, destinationURLB)
+	if err := status.WriteDestinationManifest(dataDir, config.DestinationURLHashes(initial)); err != nil {
+		t.Fatal(err)
+	}
+	deps, _, _ := newFakeDependenciesForTest(initial, &recordingConfigReloader{})
+	s, err := NewWithDependencies(initial, t.TempDir(), false, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := destinationReloadConfig(dataDir)
+	if changed, err := s.applyReloadedConfig(removed); err != nil || !changed {
+		t.Fatalf("removal reload = changed %v, err %v", changed, err)
+	}
+	manifest, found, err := status.LoadDestinationManifest(dataDir)
+	if err != nil || !found || len(manifest.Retired) != 4 {
+		t.Fatalf("removed manifest = %+v, found %v, err %v", manifest, found, err)
+	}
+	swapped := destinationReloadConfig(dataDir, destinationURLB, destinationURLA)
+	if changed, err := s.applyReloadedConfig(swapped); !errors.Is(err, errDestinationRemapRejected) || changed {
+		t.Fatalf("swapped reload = changed %v, err %v; want rejected", changed, err)
+	}
+	if got := config.DestinationURLHashes(s.getConfig()); len(got) != 0 {
+		t.Fatalf("rejected reload changed active endpoints: %v", got)
+	}
+	still, _, err := status.LoadDestinationManifest(dataDir)
+	if err != nil || !reflect.DeepEqual(still.Retired, manifest.Retired) {
+		t.Fatalf("rejected reload changed tombstones: before %+v, after %+v, err %v", manifest, still, err)
+	}
+}
+
 func assertRemapRejectionLog(t *testing.T, hook *logtest.Hook) {
 	t.Helper()
 	entry := findTestLogEntry(hook, "Config reload rejected: webhook endpoints were remapped onto existing destination IDs")

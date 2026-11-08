@@ -10,6 +10,7 @@
 
 ### Improved
 
+- Destination IDs retain their webhook hash after an endpoint is removed. Re-adding a different webhook at that position now requires explicit `--accept-destination-remap`, including when removal and re-addition happen across separate starts. Existing manifests are upgraded conservatively when older status markers cannot identify their original endpoint.
 - Successful API sends complete the delivery audit write attempt before marking an item sent, so concurrent status saves cannot get ahead of an in-progress audit write.
 - HTML-derived alert text removes invisible word joiners and soft hyphens. An RSS item identified only by its title may be delivered once more after the upgrade if its title contained either character.
 - Shared webhook URLs with three or more destinations no longer replay older alerts when status retention trims sent markers.

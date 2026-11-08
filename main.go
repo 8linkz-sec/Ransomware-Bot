@@ -281,8 +281,8 @@ func runConfiguredScheduler(cfg *config.Config, opts cliOptions) int {
 }
 
 // applyDestinationManifest compares the webhook endpoints of cfg against
-// destinations.json in data_dir and refuses the start when an existing
-// destination ID now points at a different webhook URL. Returns the process
+// destinations.json in data_dir and refuses the start when a destination ID
+// has a changed or unknowable previous webhook binding. Returns the process
 // exit code: 1 for a refusal, 0 otherwise.
 //
 // Destination IDs are positional, and dedup markers, retry-queue rows and dead
@@ -305,7 +305,7 @@ func applyDestinationManifest(cfg *config.Config, opts cliOptions, out io.Writer
 	}
 
 	if found {
-		diff := status.DiffDestinations(manifest.Destinations, current)
+		diff := status.DiffDestinationManifest(manifest, current)
 		if diff.HasRemap() {
 			fields := status.DestinationRemapLogFields(diff, manifestPath)
 			if !opts.acceptDestinationRemap {
@@ -357,7 +357,7 @@ func pendingDestinationRemap(cfg *config.Config, dataDir string) (diff status.De
 	if !found {
 		return status.DestinationDiff{}, false, nil
 	}
-	diff = status.DiffDestinations(manifest.Destinations, config.DestinationURLHashes(cfg))
+	diff = status.DiffDestinationManifest(manifest, config.DestinationURLHashes(cfg))
 	if !diff.HasRemap() {
 		return status.DestinationDiff{}, false, nil
 	}

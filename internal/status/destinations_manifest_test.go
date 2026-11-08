@@ -381,6 +381,25 @@ func TestDestinationManifestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDestinationManifestRejectsTwoStartLaundering(t *testing.T) {
+	dataDir := t.TempDir()
+	first := map[string]string{"discord.ransomware": hashA, "discord.ransomware.2": hashB}
+	if err := WriteDestinationManifest(dataDir, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteDestinationManifest(dataDir, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, found, err := LoadDestinationManifest(dataDir)
+	if err != nil || !found {
+		t.Fatalf("LoadDestinationManifest() = found %v, err %v", found, err)
+	}
+	reordered := map[string]string{"discord.ransomware": hashB, "discord.ransomware.2": hashA}
+	if diff := DiffDestinationManifest(manifest, reordered); !diff.HasRemap() {
+		t.Fatalf("re-added swapped endpoints escaped remap guard: %+v", diff)
+	}
+}
+
 func TestLoadDestinationManifestMissingFileIsNotAnError(t *testing.T) {
 	tests := []struct {
 		name    string

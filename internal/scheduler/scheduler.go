@@ -1257,7 +1257,7 @@ func rejectDestinationRemapForReload(newCfg *config.Config) error {
 	if !found {
 		return nil
 	}
-	diff := status.DiffDestinations(manifest.Destinations, config.DestinationURLHashes(newCfg))
+	diff := status.DiffDestinationManifest(manifest, config.DestinationURLHashes(newCfg))
 	if !diff.HasRemap() {
 		return nil
 	}

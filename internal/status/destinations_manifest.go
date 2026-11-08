@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,8 +14,8 @@ import (
 )
 
 // DestinationManifestVersion is the on-disk schema version of destinations.json.
-// A manifest carrying any other version is treated as absent and rewritten.
-const DestinationManifestVersion = 1
+// Version 1 is upgraded in memory; other versions are treated as unreadable.
+const DestinationManifestVersion = 2
 
 const destinationManifestFileName = "destinations.json"
 
@@ -27,10 +28,11 @@ const (
 	DestinationChangeInsert     = "insert"
 	DestinationChangeDelete     = "delete"
 	DestinationChangeURLChanged = "url_changed"
+	DestinationChangeUnknown    = "previous_binding_unknown"
 )
 
 const destinationRemapConsequence = "stored dedup markers, retry-queue rows and dead letters are keyed by the " +
-	"destination ID; alerts for one endpoint would be suppressed and another endpoint's queued deliveries " +
+	"destination ID; alerts for one endpoint could be suppressed and another endpoint's queued deliveries " +
 	"replayed to the wrong webhook"
 
 const destinationRemapRemedy = "restore the previous endpoint order (append new endpoints at the end of " +
@@ -39,12 +41,16 @@ const destinationRemapRemedy = "restore the previous endpoint order (append new 
 
 const destinationManifestSkippedCheck = "the endpoint-order check is skipped for this start"
 
-// DestinationManifest binds every positional destination ID to a hash of the
-// webhook URL it was last used with. It never stores a URL, a host or a token.
+// DestinationManifest binds active and removed positional IDs to webhook URL
+// hashes. UnknownIDs and Unattributed preserve uncertainty from version 1.
+// It never stores a URL, a host or a token.
 type DestinationManifest struct {
 	Version      int               `json:"version"`
 	UpdatedAt    string            `json:"updated_at"`
 	Destinations map[string]string `json:"destinations"`
+	Retired      map[string]string `json:"retired,omitempty"`
+	UnknownIDs   []string          `json:"unknown_ids,omitempty"`
+	Unattributed bool              `json:"unattributed,omitempty"`
 }
 
 // DestinationManifestPath returns the manifest path inside dataDir, or an empty
@@ -59,8 +65,9 @@ func DestinationManifestPath(dataDir string) string {
 // LoadDestinationManifest reads destinations.json. A missing file and an empty
 // data directory both return (zero, false, nil); an unreadable, unparseable or
 // unknown-version file returns an error, and callers treat that as absent after
-// warning. On a version mismatch the returned manifest still carries the parsed
-// version so the warning can name it.
+// warning. Version 1 is upgraded and both versions are reconciled in memory
+// against persisted status rows.
+// On a version mismatch the returned manifest still carries the parsed version.
 func LoadDestinationManifest(dataDir string) (DestinationManifest, bool, error) {
 	path := DestinationManifestPath(dataDir)
 	if path == "" {
@@ -79,7 +86,7 @@ func LoadDestinationManifest(dataDir string) (DestinationManifest, bool, error) 
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return DestinationManifest{}, false, fmt.Errorf("parse destination manifest: %w", err)
 	}
-	if manifest.Version != DestinationManifestVersion {
+	if manifest.Version != 1 && manifest.Version != DestinationManifestVersion {
 		return DestinationManifest{
 			Version: manifest.Version,
 		}, false, fmt.Errorf(
@@ -88,12 +95,13 @@ func LoadDestinationManifest(dataDir string) (DestinationManifest, bool, error) 
 	if manifest.Destinations == nil {
 		manifest.Destinations = map[string]string{}
 	}
+	manifest = reconcilePersistedDestinationHistory(dataDir, manifest)
 	return manifest, true, nil
 }
 
-// WriteDestinationManifest writes destinations.json atomically with the same
-// 0600 mode as every other status file, creating the data directory first
-// because the atomic writer does not.
+// WriteDestinationManifest advances destinations.json atomically with the same
+// 0600 mode as every other status file. It reloads the previous manifest so
+// removed-ID bindings survive successful loads and reloads.
 func WriteDestinationManifest(dataDir string, hashes map[string]string) error {
 	path := DestinationManifestPath(dataDir)
 	if path == "" {
@@ -103,16 +111,176 @@ func WriteDestinationManifest(dataDir string, hashes map[string]string) error {
 		return fmt.Errorf("write destination manifest: %w", err)
 	}
 
-	destinations := make(map[string]string, len(hashes))
-	for id, hash := range hashes {
-		destinations[id] = hash
+	previous, found, err := LoadDestinationManifest(dataDir)
+	if err != nil {
+		// Keep the existing self-heal policy for unreadable manifests. The
+		// caller has already warned when its pre-write check saw the error.
+		previous = DestinationManifest{}
+	} else if !found {
+		previous = DestinationManifest{}
 	}
-	manifest := DestinationManifest{
+	manifest := NextDestinationManifest(previous, hashes)
+	return writeAtomicJSONFileFunc(path, "destination manifest", manifest)
+}
+
+// NextDestinationManifest advances a successfully checked or explicitly
+// accepted mapping. Removed IDs retain their last hash until that ID returns.
+func NextDestinationManifest(previous DestinationManifest, current map[string]string) DestinationManifest {
+	next := DestinationManifest{
 		Version:      DestinationManifestVersion,
 		UpdatedAt:    time.Now().UTC().Format(statusTimestampLayout),
-		Destinations: destinations,
+		Destinations: make(map[string]string, len(current)),
+		Retired:      make(map[string]string, len(previous.Retired)+len(previous.Destinations)),
+		Unattributed: previous.Unattributed,
 	}
-	return writeAtomicJSONFileFunc(path, "destination manifest", manifest)
+	for id, hash := range previous.Retired {
+		next.Retired[id] = hash
+	}
+	for id, hash := range previous.Destinations {
+		if _, present := current[id]; !present {
+			next.Retired[id] = hash
+		}
+	}
+	for id, hash := range current {
+		next.Destinations[id] = hash
+		delete(next.Retired, id)
+	}
+	for _, id := range previous.UnknownIDs {
+		if _, present := current[id]; !present {
+			next.UnknownIDs = append(next.UnknownIDs, id)
+		}
+	}
+	sort.Strings(next.UnknownIDs)
+	return next
+}
+
+// DiffDestinationManifest compares current endpoints against active and retired
+// bindings. A v1 ID whose previous hash was lost is conservatively treated as
+// a remap when it returns. Unattributed legacy markers make every new ID unsafe.
+func DiffDestinationManifest(manifest DestinationManifest, current map[string]string) DestinationDiff {
+	known := make(map[string]string, len(manifest.Destinations)+len(manifest.Retired)+len(manifest.UnknownIDs))
+	for id, hash := range manifest.Retired {
+		known[id] = hash
+	}
+	for _, id := range manifest.UnknownIDs {
+		known[id] = ""
+	}
+	for id, hash := range manifest.Destinations {
+		known[id] = hash
+	}
+	diff := DiffDestinations(known, current)
+	for _, remap := range diff.Remapped {
+		if known[remap.ID] == "" {
+			diff.Unknown = true
+			break
+		}
+	}
+	if manifest.Unattributed {
+		for _, id := range diff.Added {
+			diff.Remapped = append(diff.Remapped, DestinationRemap{ID: id})
+			diff.Unknown = true
+		}
+	}
+	sort.Slice(diff.Remapped, func(i, j int) bool { return diff.Remapped[i].ID < diff.Remapped[j].ID })
+	// Retired and unknown IDs are historical bindings, not IDs removed by this
+	// configuration change. Keep the operator's removed-ID log meaningful.
+	diff.Removed = diff.Removed[:0]
+	for id := range manifest.Destinations {
+		if _, present := current[id]; !present {
+			diff.Removed = append(diff.Removed, id)
+		}
+	}
+	sort.Strings(diff.Removed)
+	return diff
+}
+
+// reconcilePersistedDestinationHistory recovers IDs visible in status state
+// that a v1 manifest forgot or a v2 manifest missed after a failed write. A
+// blank sent-marker owner cannot be reversed from its hashed composite key, so
+// future new IDs remain uncertain instead.
+func reconcilePersistedDestinationHistory(dataDir string, manifest DestinationManifest) DestinationManifest {
+	tracker, err := NewReadOnlyTracker(dataDir)
+	if err != nil {
+		manifest.Unattributed = true
+		log.WithError(err).WithField("manifest", DestinationManifestPath(dataDir)).
+			Warn("Destination manifest could not inspect status history; new destination IDs require explicit acceptance")
+		return manifest
+	}
+	ids, unattributed := tracker.persistedDestinationIDs()
+	manifest.Unattributed = manifest.Unattributed || unattributed
+	known := make(map[string]struct{}, len(manifest.Destinations)+len(manifest.Retired)+len(manifest.UnknownIDs))
+	for id := range manifest.Destinations {
+		known[id] = struct{}{}
+	}
+	for id := range manifest.Retired {
+		known[id] = struct{}{}
+	}
+	for _, id := range manifest.UnknownIDs {
+		known[id] = struct{}{}
+	}
+	for id := range ids {
+		if _, present := known[id]; !present {
+			manifest.UnknownIDs = append(manifest.UnknownIDs, id)
+		}
+	}
+	sort.Strings(manifest.UnknownIDs)
+	return manifest
+}
+
+// persistedDestinationIDs returns the destination IDs still present in status
+// rows. A blank sent-marker owner is ambiguous because its composite key is a
+// SHA-256 digest and cannot be reversed to determine whether it used an ID.
+func (t *Tracker) persistedDestinationIDs() (map[string]struct{}, bool) {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	ids := make(map[string]struct{})
+	unattributed := false
+	for _, item := range t.apiStatus.SentItems {
+		if !recordPersistedDestinationID(ids, item.DestinationID) {
+			unattributed = true
+		}
+	}
+	for _, item := range t.rssStatus.SentItems {
+		if !recordPersistedDestinationID(ids, item.DestinationID) {
+			unattributed = true
+		}
+	}
+	for _, item := range t.retryStore.status.RetryQueue {
+		if !recordPersistedDestinationID(ids, item.DestinationID) {
+			unattributed = true
+		}
+	}
+	for _, item := range t.retryStore.status.DeadLetterItems {
+		if !recordPersistedDestinationID(ids, item.DestinationID) {
+			unattributed = true
+		}
+	}
+	return ids, unattributed
+}
+
+func recordPersistedDestinationID(ids map[string]struct{}, id string) bool {
+	if !isPositionalDestinationID(id) {
+		return false
+	}
+	ids[id] = struct{}{}
+	return true
+}
+
+func isPositionalDestinationID(id string) bool {
+	namespace := destinationNamespace(id)
+	switch namespace {
+	case "discord.ransomware", "discord.rss.ransomware", "discord.rss.general", "discord.rss.government",
+		"slack.ransomware", "slack.rss.ransomware", "slack.rss.general", "slack.rss.government",
+		"slack_compatible.ransomware", "slack_compatible.rss.ransomware", "slack_compatible.rss.general", "slack_compatible.rss.government":
+	default:
+		return false
+	}
+	if id == namespace {
+		return true
+	}
+	suffix := strings.TrimPrefix(id, namespace+".")
+	position, err := strconv.Atoi(suffix)
+	return err == nil && position >= 2 && strconv.Itoa(position) == suffix
 }
 
 // DestinationRemap is one destination ID whose webhook URL changed, together
@@ -123,12 +291,13 @@ type DestinationRemap struct {
 }
 
 // DestinationDiff compares the manifest against the current configuration.
-// Added and Removed IDs are always safe; a non-empty Remapped means stored
-// state would be applied to a different webhook.
+// Added and Removed describe current IDs only; Unknown marks a remap whose
+// previous binding cannot be reconstructed from legacy state.
 type DestinationDiff struct {
 	Remapped []DestinationRemap
 	Added    []string
 	Removed  []string
+	Unknown  bool
 }
 
 // destinationNamespace strips a trailing all-digit positional suffix, so the
@@ -199,8 +368,8 @@ func previousOwnersOf(previous map[string]string, id, hash string) []string {
 	return owners
 }
 
-// HasRemap reports whether an existing destination ID now points at a different
-// webhook URL. This is the only condition that refuses a start or a reload.
+// HasRemap reports whether an ID has a changed or unknowable previous binding.
+// This is the only condition that refuses a start or a reload.
 func (d DestinationDiff) HasRemap() bool {
 	return len(d.Remapped) > 0
 }
@@ -218,9 +387,8 @@ func (d DestinationDiff) RemappedIDs() []string {
 }
 
 // Kind is a headline for the remap, never a classification: precedence is
-// delete > insert > reorder > url_changed, so a combined edit is labelled by
-// the first matching branch. It is empty when nothing was remapped, which is
-// the append-only and delete-from-the-end case.
+// delete > insert > reorder > unknown > url_changed. It is empty when nothing
+// was remapped, including a provably fresh append or removal from the end.
 func (d DestinationDiff) Kind() string {
 	if !d.HasRemap() {
 		return ""
@@ -239,6 +407,8 @@ func (d DestinationDiff) Kind() string {
 		return DestinationChangeInsert
 	case moved:
 		return DestinationChangeReorder
+	case d.Unknown:
+		return DestinationChangeUnknown
 	default:
 		return DestinationChangeURLChanged
 	}

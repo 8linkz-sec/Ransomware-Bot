@@ -121,15 +121,16 @@ var englishMessages = map[string]string{
 		"the destination endpoint-order check was skipped for this run",
 	"cli.config_valid": "Configuration valid",
 	"cli.destination_remap": "Destination remap detected (%s): %s. Stored dedup markers, retry-queue rows and dead letters " +
-		"are keyed by the destination ID, so starting with this configuration would silently suppress alerts for one " +
+		"are keyed by the destination ID, so starting with this configuration could silently suppress alerts for one " +
 		"endpoint and deliver another endpoint's queued messages to the wrong webhook. Restore the previous endpoint " +
 		"order (append new endpoints at the end of url/urls/targets, delete only from the end), or start once with " +
 		"--accept-destination-remap to accept the new mapping and rewrite %s.\n",
 
-	"destination_remap.kind.reorder":     "endpoints reordered",
-	"destination_remap.kind.insert":      "endpoint inserted before an existing one",
-	"destination_remap.kind.delete":      "endpoint deleted before an existing one",
-	"destination_remap.kind.url_changed": "endpoint URL changed",
+	"destination_remap.kind.reorder":                  "endpoints reordered",
+	"destination_remap.kind.insert":                   "endpoint inserted before an existing one",
+	"destination_remap.kind.delete":                   "endpoint deleted before an existing one",
+	"destination_remap.kind.url_changed":              "endpoint URL changed",
+	"destination_remap.kind.previous_binding_unknown": "previous endpoint binding unknown",
 
 	"health.data_dir":                        "Data dir: %s\n",
 	"health.destination_manifest_unreadable": "Destination manifest unreadable (%s); the endpoint-order check was skipped for this run\n",
@@ -145,8 +146,8 @@ var englishMessages = map[string]string{
 	"health.rss_never_polled":                "RSS is enabled (%d feed(s) configured) but no poll attempt has been recorded since the scheduler finished starting; check the data_dir volume mount and its write permissions",
 	"health.rss_budget_overrun":              "RSS is enabled (%d feed(s) configured) but the last completed poll pass exhausted its rss_check_timeout (%s) before any feed answered; raise rss_check_timeout above rss_worker_timeout (%s) so feeds have time to complete",
 	"health.poller_wedged":                   "the %s poller has completed no poll pass for %s (last completed %s); the allowance is %s, three times its poll interval plus its check timeout, so the poller is wedged rather than idle",
-	"health.destination_remap": "destination remap pending (%s): %s; the bot refuses to start until the previous " +
-		"endpoint order is restored or it is started once with --accept-destination-remap",
+	"health.destination_remap": "destination remap pending (%s): %s; the bot refuses to start until the " +
+		"mapping is corrected or it is started once with --accept-destination-remap",
 	"health.data_dir_lock_unsupported": "Note: this data dir's filesystem does not support file locking (ENOLCK/EINVAL); " +
 		"nothing prevents a second ransomware-bot instance from writing the same data_dir, and file logging falls " +
 		"back to stdout only (bot.log stays empty) for the same reason. Move data_dir to a filesystem that supports " +
@@ -192,16 +193,17 @@ var germanMessages = map[string]string{
 		"die Endpunkt-Reihenfolge-Pruefung wurde fuer diesen Lauf uebersprungen",
 	"cli.config_valid": "Konfiguration gueltig",
 	"cli.destination_remap": "Ziel-Neuzuordnung erkannt (%s): %s. Gespeicherte Dedup-Marker, Retry-Eintraege und " +
-		"Dead-Letter-Eintraege sind an die Ziel-ID gebunden; ein Start mit dieser Konfiguration wuerde Alerts eines " +
+		"Dead-Letter-Eintraege sind an die Ziel-ID gebunden; ein Start mit dieser Konfiguration koennte Alerts eines " +
 		"Endpunkts stillschweigend unterdruecken und die eingereihten Nachrichten eines anderen Endpunkts an den " +
 		"falschen Webhook zustellen. Stelle die bisherige Reihenfolge der Endpunkte wieder her (neue Endpunkte nur " +
 		"am Ende von url/urls/targets anhaengen, nur am Ende loeschen) oder starte einmalig mit " +
 		"--accept-destination-remap, um die neue Zuordnung zu akzeptieren und %s neu zu schreiben.\n",
 
-	"destination_remap.kind.reorder":     "Endpunkte umsortiert",
-	"destination_remap.kind.insert":      "Endpunkt vor einem bestehenden eingefuegt",
-	"destination_remap.kind.delete":      "Endpunkt vor einem bestehenden geloescht",
-	"destination_remap.kind.url_changed": "Endpunkt-URL geaendert",
+	"destination_remap.kind.reorder":                  "Endpunkte umsortiert",
+	"destination_remap.kind.insert":                   "Endpunkt vor einem bestehenden eingefuegt",
+	"destination_remap.kind.delete":                   "Endpunkt vor einem bestehenden geloescht",
+	"destination_remap.kind.url_changed":              "Endpunkt-URL geaendert",
+	"destination_remap.kind.previous_binding_unknown": "fruehere Endpunkt-Zuordnung unbekannt",
 
 	"health.data_dir":                        "Datenverzeichnis: %s\n",
 	"health.destination_manifest_unreadable": "Ziel-Manifest nicht lesbar (%s); die Endpunkt-Reihenfolge-Pruefung wurde fuer diesen Lauf uebersprungen\n",
@@ -218,7 +220,7 @@ var germanMessages = map[string]string{
 	"health.rss_budget_overrun":              "RSS ist aktiviert (%d Feed(s) konfiguriert), aber der letzte abgeschlossene Abrufdurchlauf hat sein rss_check_timeout (%s) ausgeschoepft, bevor ein Feed geantwortet hat; rss_check_timeout ueber rss_worker_timeout (%s) anheben, damit Feeds Zeit zum Abschliessen haben",
 	"health.poller_wedged":                   "der %s-Poller hat seit %s keinen Abrufdurchlauf abgeschlossen (letzter Durchlauf %s); erlaubt sind %s, das Dreifache aus Poll-Intervall plus Check-Timeout, der Poller haengt also, statt nur untaetig zu sein",
 	"health.destination_remap": "Ziel-Neuzuordnung ausstehend (%s): %s; der Bot startet nicht, bis die " +
-		"bisherige Reihenfolge wiederhergestellt ist oder er einmalig mit --accept-destination-remap gestartet wird",
+		"Zuordnung korrigiert ist oder er einmalig mit --accept-destination-remap gestartet wird",
 	"health.data_dir_lock_unsupported": "Hinweis: Das Dateisystem dieses Datenverzeichnisses unterstuetzt keine Dateisperren " +
 		"(ENOLCK/EINVAL); nichts verhindert, dass eine zweite ransomware-bot-Instanz dasselbe data_dir beschreibt, und " +
 		"aus demselben Grund faellt die Datei-Protokollierung auf reine Standardausgabe zurueck (bot.log bleibt leer). " +
