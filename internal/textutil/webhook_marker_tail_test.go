@@ -1,6 +1,8 @@
 package textutil
 
 import (
+	"errors"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -73,5 +75,40 @@ func TestRedactWebhookSecretsForURLConsumesQueryAndRepeatedTails(t *testing.T) {
 	}
 	if !strings.Contains(got, " and ") || !strings.Contains(got, " next https://other.example.test/public") {
 		t.Fatalf("unrelated context was lost: %q", got)
+	}
+}
+
+func TestRedactWebhookSecretsForURLPreservesQuotedURLErrorSyntax(t *testing.T) {
+	tests := []struct {
+		name        string
+		anchor      string
+		urlInError  string
+		wantRawPath bool
+	}{
+		{
+			name:       "exact configured URL",
+			anchor:     "https://hooks.example.test/services/T0",
+			urlInError: "https://hooks.example.test/services/T0",
+		},
+		{
+			name:        "RawPath variant without query",
+			anchor:      "https://hooks.example.test/services/a%2Fb%5Cc?token=SECRET",
+			urlInError:  "https://hooks.example.test/services/a%2Fb%5Cc",
+			wantRawPath: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, err := url.Parse(tt.anchor)
+			if err != nil || tt.wantRawPath && parsed.RawPath == "" {
+				t.Fatalf("url.Parse(%q) = %#v, %v; RawPath branch not exercised", tt.anchor, parsed, err)
+			}
+			input := (&url.Error{Op: "Post", URL: tt.urlInError, Err: errors.New("network down")}).Error()
+			got := RedactWebhookSecretsForURL(input, tt.anchor)
+			want := `Post "https://hooks.example.test/services/[redacted]": network down`
+			if got != want {
+				t.Fatalf("RedactWebhookSecretsForURL(%q) = %q, want %q", input, got, want)
+			}
+		})
 	}
 }
