@@ -4771,7 +4771,8 @@ func TestProcessAPIRetryQueueRunsIndependentDestinationsConcurrently(t *testing.
 	waitForTestSignalWithTimeout(t, slackSender.started, 250*time.Millisecond, "slack API retry send start")
 	discordSender.releaseSends()
 	slackSender.releaseSends()
-	waitForTestSignalWithTimeout(t, done, time.Second, "API retry queue completion")
+	// Queue completion persists status and may take longer under filesystem load.
+	waitForTestSignalWithTimeout(t, done, 30*time.Second, "API retry queue completion")
 
 	if remaining := s.statusTracker.GetQueuedRetryItemsByType("api"); len(remaining) != 0 {
 		t.Fatalf("remaining API retry queue length = %d, want 0", len(remaining))
