@@ -513,8 +513,9 @@ func TestRotatingFileWriterWritePropagatesRotationError(t *testing.T) {
 
 	chunk := bytes.Repeat([]byte("x"), bytesPerMegabyte/2)
 	var writeErr error
+	var n int
 	for i := 0; i < 4; i++ {
-		if _, writeErr = writer.Write(chunk); writeErr != nil {
+		if n, writeErr = writer.Write(chunk); writeErr != nil {
 			break
 		}
 	}
@@ -523,6 +524,16 @@ func TestRotatingFileWriterWritePropagatesRotationError(t *testing.T) {
 	}
 	if !strings.Contains(writeErr.Error(), "list log backups") {
 		t.Fatalf("Write() error = %v, want backup listing failure", writeErr)
+	}
+	if n != len(chunk) {
+		t.Fatalf("Write() n = %d, want %d bytes despite cleanup failure", n, len(chunk))
+	}
+	contents, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile() after failed rotation: %v", err)
+	}
+	if !bytes.Equal(contents, chunk) {
+		t.Fatalf("active log does not contain the record attempted after failed rotation")
 	}
 }
 
