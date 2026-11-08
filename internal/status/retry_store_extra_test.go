@@ -644,6 +644,15 @@ func TestMarkRetryDeadLetterForDestinationKeepsQueuedHistory(t *testing.T) {
 		t.Fatalf("dead letter count = %d, want 1", len(deadLetters))
 	}
 	got := deadLetters[0]
+	assertQueuedHistoryDeadLetterPayload(t, got)
+	assertQueuedHistoryDeadLetterError(t, got)
+	if items := tracker.GetQueuedRetryItemsByType("api"); len(items) != 0 {
+		t.Fatalf("queued retry records after dead-lettering = %d, want 0", len(items))
+	}
+}
+
+func assertQueuedHistoryDeadLetterPayload(t *testing.T, got DeadLetterEntry) {
+	t.Helper()
 	if got.RetryCount != 3 {
 		t.Fatalf("RetryCount = %d, want 3 inherited from the queued row", got.RetryCount)
 	}
@@ -665,6 +674,10 @@ func TestMarkRetryDeadLetterForDestinationKeepsQueuedHistory(t *testing.T) {
 	if got.Title != "Terminal Example" {
 		t.Fatalf("Title = %q, want the mark call title Terminal Example, not the queued row's Example", got.Title)
 	}
+}
+
+func assertQueuedHistoryDeadLetterError(t *testing.T, got DeadLetterEntry) {
+	t.Helper()
 	if got.ItemType != "api" || got.Messenger != "slack" {
 		t.Fatalf("ItemType/Messenger = %q/%q, want api/slack", got.ItemType, got.Messenger)
 	}
@@ -679,9 +692,6 @@ func TestMarkRetryDeadLetterForDestinationKeepsQueuedHistory(t *testing.T) {
 	}
 	if got.DeadAt == got.FirstFailed {
 		t.Fatalf("DeadAt = %q, want a terminal timestamp distinct from FirstFailed", got.DeadAt)
-	}
-	if items := tracker.GetQueuedRetryItemsByType("api"); len(items) != 0 {
-		t.Fatalf("queued retry records after dead-lettering = %d, want 0", len(items))
 	}
 }
 
@@ -818,58 +828,63 @@ func TestMarkRetryDeadLetterForDestinationKeepsRSSRecoveryHistory(t *testing.T) 
 
 func TestMarkRetryDeadLetterLegacyPicksQueuedRowDeterministically(t *testing.T) {
 	for i := 0; i < 20; i++ {
-		tracker := newTestTracker(t)
+		assertLegacyDeadLetterPicksFurthestQueuedRow(t, i)
+	}
+}
 
-		if !tracker.enqueueRetryForTest(RetryRequest{
-			ItemKey:       "tie-item",
-			DestinationID: "discord.a",
-			Messenger:     Messenger("discord"),
-			ItemType:      RetryItemType("api"),
-			Title:         "Example",
-			LastError:     "boom",
-			MaxAttempts:   10,
-			RetryWindow:   time.Hour,
-			Payload:       []byte(`{"id":"row-a"}`),
-		}) {
-			t.Fatalf("iteration %d: EnqueueRetry(discord.a) unexpectedly failed", i)
-		}
-		if !tracker.enqueueRetryForTest(RetryRequest{
-			ItemKey:       "tie-item",
-			DestinationID: "discord.b",
-			Messenger:     Messenger("discord"),
-			ItemType:      RetryItemType("api"),
-			Title:         "Example",
-			LastError:     "boom",
-			MaxAttempts:   10,
-			RetryWindow:   time.Hour,
-			Payload:       []byte(`{"id":"row-b"}`),
-		}) {
-			t.Fatalf("iteration %d: EnqueueRetry(discord.b) unexpectedly failed", i)
-		}
-		queueKeyB := queuedRetryKeyForDestinationForTest(t, tracker, "tie-item", "api", "discord.b")
-		if !tracker.RecordRetryQueueFailure(queueKeyB, "boom again", 10, time.Hour) {
-			t.Fatalf("iteration %d: RecordRetryQueueFailure(discord.b) unexpectedly failed", i)
-		}
+func assertLegacyDeadLetterPicksFurthestQueuedRow(t *testing.T, i int) {
+	t.Helper()
+	tracker := newTestTracker(t)
 
-		tracker.MarkRetryDeadLetter("tie-item", "discord", "api", "Example", "terminal")
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "tie-item",
+		DestinationID: "discord.a",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   10,
+		RetryWindow:   time.Hour,
+		Payload:       []byte(`{"id":"row-a"}`),
+	}) {
+		t.Fatalf("iteration %d: EnqueueRetry(discord.a) unexpectedly failed", i)
+	}
+	if !tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "tie-item",
+		DestinationID: "discord.b",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   10,
+		RetryWindow:   time.Hour,
+		Payload:       []byte(`{"id":"row-b"}`),
+	}) {
+		t.Fatalf("iteration %d: EnqueueRetry(discord.b) unexpectedly failed", i)
+	}
+	queueKeyB := queuedRetryKeyForDestinationForTest(t, tracker, "tie-item", "api", "discord.b")
+	if !tracker.RecordRetryQueueFailure(queueKeyB, "boom again", 10, time.Hour) {
+		t.Fatalf("iteration %d: RecordRetryQueueFailure(discord.b) unexpectedly failed", i)
+	}
 
-		deadLetters := tracker.GetDeadLetterItems()
-		if len(deadLetters) != 1 {
-			t.Fatalf("iteration %d: dead letter count = %d, want 1", i, len(deadLetters))
-		}
-		got := deadLetters[0]
-		if got.RetryCount != 2 {
-			t.Fatalf("iteration %d: RetryCount = %d, want 2 from the furthest-attempted row", i, got.RetryCount)
-		}
-		if string(got.Payload) != `{"id":"row-b"}` {
-			t.Fatalf("iteration %d: Payload = %q, want the discord.b payload", i, string(got.Payload))
-		}
-		if got.DestinationID != "" {
-			t.Fatalf("iteration %d: DestinationID = %q, want it to stay blank", i, got.DestinationID)
-		}
-		if items := tracker.GetQueuedRetryItemsByType("api"); len(items) != 0 {
-			t.Fatalf("iteration %d: queued retry records = %d, want 0", i, len(items))
-		}
+	tracker.MarkRetryDeadLetter("tie-item", "discord", "api", "Example", "terminal")
+
+	deadLetters := tracker.GetDeadLetterItems()
+	if len(deadLetters) != 1 {
+		t.Fatalf("iteration %d: dead letter count = %d, want 1", i, len(deadLetters))
+	}
+	got := deadLetters[0]
+	if got.RetryCount != 2 {
+		t.Fatalf("iteration %d: RetryCount = %d, want 2 from the furthest-attempted row", i, got.RetryCount)
+	}
+	if string(got.Payload) != `{"id":"row-b"}` {
+		t.Fatalf("iteration %d: Payload = %q, want the discord.b payload", i, string(got.Payload))
+	}
+	if got.DestinationID != "" {
+		t.Fatalf("iteration %d: DestinationID = %q, want it to stay blank", i, got.DestinationID)
+	}
+	if items := tracker.GetQueuedRetryItemsByType("api"); len(items) != 0 {
+		t.Fatalf("iteration %d: queued retry records = %d, want 0", i, len(items))
 	}
 }
 
@@ -957,50 +972,55 @@ func TestEnqueueRetryAttemptBudgetAcrossMaxAttempts(t *testing.T) {
 			tracker := NewMemoryTracker()
 
 			for i, step := range tc.steps {
-				enqueued := tracker.enqueueRetryForTest(RetryRequest{
-					ItemKey:       "item-1",
-					DestinationID: "discord.ransomware",
-					Messenger:     Messenger("discord"),
-					ItemType:      RetryItemType("api"),
-					Title:         "Example",
-					LastError:     "boom",
-					MaxAttempts:   tc.maxAttempts,
-					RetryWindow:   time.Hour,
-				})
-				if enqueued != step.wantEnqueued {
-					t.Fatalf("failure #%d: EnqueueRetry() = %v, want %v", i+1, enqueued, step.wantEnqueued)
-				}
-
-				queued := tracker.GetRetryItemsByType("api")
-				if len(queued) != step.wantQueueLen {
-					t.Fatalf("failure #%d: retry queue length = %d, want %d", i+1, len(queued), step.wantQueueLen)
-				}
-				gotRetryCount := -1
-				if len(queued) == 1 {
-					gotRetryCount = queued[0].RetryCount
-				}
-				if gotRetryCount != step.wantRetryCount {
-					t.Fatalf("failure #%d: queued RetryCount = %d, want %d", i+1, gotRetryCount, step.wantRetryCount)
-				}
-
-				deadLetters := tracker.GetDeadLetterItems()
-				if len(deadLetters) != step.wantDeadLen {
-					t.Fatalf("failure #%d: dead letter count = %d, want %d", i+1, len(deadLetters), step.wantDeadLen)
-				}
-				gotReason := ""
-				gotDeadRetryCount := -1
-				if len(deadLetters) == 1 {
-					gotReason = deadLetters[0].TerminalReason
-					gotDeadRetryCount = deadLetters[0].RetryCount
-				}
-				if gotReason != step.wantTerminalReason {
-					t.Fatalf("failure #%d: dead letter TerminalReason = %q, want %q", i+1, gotReason, step.wantTerminalReason)
-				}
-				if gotDeadRetryCount != step.wantDeadRetryCount {
-					t.Fatalf("failure #%d: dead letter RetryCount = %d, want %d", i+1, gotDeadRetryCount, step.wantDeadRetryCount)
-				}
+				assertRetryAttemptBudgetStep(t, tracker, tc.maxAttempts, i, step)
 			}
 		})
+	}
+}
+
+func assertRetryAttemptBudgetStep(t *testing.T, tracker *Tracker, maxAttempts, i int, step attemptBudgetStep) {
+	t.Helper()
+	enqueued := tracker.enqueueRetryForTest(RetryRequest{
+		ItemKey:       "item-1",
+		DestinationID: "discord.ransomware",
+		Messenger:     Messenger("discord"),
+		ItemType:      RetryItemType("api"),
+		Title:         "Example",
+		LastError:     "boom",
+		MaxAttempts:   maxAttempts,
+		RetryWindow:   time.Hour,
+	})
+	if enqueued != step.wantEnqueued {
+		t.Fatalf("failure #%d: EnqueueRetry() = %v, want %v", i+1, enqueued, step.wantEnqueued)
+	}
+
+	queued := tracker.GetRetryItemsByType("api")
+	if len(queued) != step.wantQueueLen {
+		t.Fatalf("failure #%d: retry queue length = %d, want %d", i+1, len(queued), step.wantQueueLen)
+	}
+	gotRetryCount := -1
+	if len(queued) == 1 {
+		gotRetryCount = queued[0].RetryCount
+	}
+	if gotRetryCount != step.wantRetryCount {
+		t.Fatalf("failure #%d: queued RetryCount = %d, want %d", i+1, gotRetryCount, step.wantRetryCount)
+	}
+
+	deadLetters := tracker.GetDeadLetterItems()
+	if len(deadLetters) != step.wantDeadLen {
+		t.Fatalf("failure #%d: dead letter count = %d, want %d", i+1, len(deadLetters), step.wantDeadLen)
+	}
+	gotReason := ""
+	gotDeadRetryCount := -1
+	if len(deadLetters) == 1 {
+		gotReason = deadLetters[0].TerminalReason
+		gotDeadRetryCount = deadLetters[0].RetryCount
+	}
+	if gotReason != step.wantTerminalReason {
+		t.Fatalf("failure #%d: dead letter TerminalReason = %q, want %q", i+1, gotReason, step.wantTerminalReason)
+	}
+	if gotDeadRetryCount != step.wantDeadRetryCount {
+		t.Fatalf("failure #%d: dead letter RetryCount = %d, want %d", i+1, gotDeadRetryCount, step.wantDeadRetryCount)
 	}
 }
 
@@ -1286,7 +1306,6 @@ func TestMoveToDeadLetterWarnNamesRetryWindowExhaustedNotExhaustedRetries(t *tes
 	}
 }
 
-//nolint:gocyclo // long sequential scenario asserting retry/dead-letter state transitions; not a table split candidate
 func TestEnqueueRetryMaxAttemptsOneDeadLetterKeepsPayloadAndFirstFailed(t *testing.T) {
 	tracker := NewMemoryTracker()
 	payload := []byte(`{"post_title":"x"}`)
@@ -1318,6 +1337,13 @@ func TestEnqueueRetryMaxAttemptsOneDeadLetterKeepsPayloadAndFirstFailed(t *testi
 	}
 	got := deadLetters[0]
 
+	assertMaxAttemptsOneDeadLetterContent(t, got, payload)
+	after := time.Now().UTC()
+	assertMaxAttemptsOneDeadLetterTimestamps(t, got, before, after)
+}
+
+func assertMaxAttemptsOneDeadLetterContent(t *testing.T, got DeadLetterEntry, payload []byte) {
+	t.Helper()
 	if got.TerminalReason != TerminalReasonMaxAttempts {
 		t.Fatalf("TerminalReason = %q, want %q", got.TerminalReason, TerminalReasonMaxAttempts)
 	}
@@ -1348,8 +1374,10 @@ func TestEnqueueRetryMaxAttemptsOneDeadLetterKeepsPayloadAndFirstFailed(t *testi
 	if got.Retryable == nil || !*got.Retryable {
 		t.Fatalf("Retryable = %v, want a pointer to true", got.Retryable)
 	}
+}
 
-	after := time.Now().UTC()
+func assertMaxAttemptsOneDeadLetterTimestamps(t *testing.T, got DeadLetterEntry, before, after time.Time) {
+	t.Helper()
 	firstFailed, err := parseRequiredStatusTimestamp(got.FirstFailed)
 	if err != nil {
 		t.Fatalf("parseRequiredStatusTimestamp(FirstFailed %q) error = %v", got.FirstFailed, err)
