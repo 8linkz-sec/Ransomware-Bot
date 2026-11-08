@@ -118,12 +118,12 @@ var englishMessages = map[string]string{
 	"cli.config_warning_shared_webhook_url": "Configuration warning: webhook endpoints %s share one webhook URL; " +
 		"where their filters overlap the same alert is posted to that channel once per endpoint",
 	"cli.config_warning_manifest_unreadable": "Configuration warning: destinations.json could not be read (%s); " +
-		"the destination endpoint-order check was skipped for this run",
+		"old endpoint bindings are unknown. Restore the file from backup or start once with --accept-destination-remap to accept the current mapping",
 	"cli.config_valid": "Configuration valid",
 	"cli.destination_remap": "Destination remap detected (%s): %s. Stored dedup markers, retry-queue rows and dead letters " +
 		"are keyed by the destination ID, so starting with this configuration could silently suppress alerts for one " +
 		"endpoint and deliver another endpoint's queued messages to the wrong webhook. Restore the previous endpoint " +
-		"order (append new endpoints at the end of url/urls/targets, delete only from the end), or start once with " +
+		"mapping (and destinations.json from backup if unreadable), or start once with " +
 		"--accept-destination-remap to accept the new mapping and rewrite %s.\n",
 
 	"destination_remap.kind.reorder":                  "endpoints reordered",
@@ -133,7 +133,7 @@ var englishMessages = map[string]string{
 	"destination_remap.kind.previous_binding_unknown": "previous endpoint binding unknown",
 
 	"health.data_dir":                        "Data dir: %s\n",
-	"health.destination_manifest_unreadable": "Destination manifest unreadable (%s); the endpoint-order check was skipped for this run\n",
+	"health.destination_manifest_unreadable": "Destination manifest unreadable (%s); restore it from backup or start once with --accept-destination-remap to accept the current mapping\n",
 	"health.retry_queue_items":               "Retry queue items: %d\n",
 	"health.dead_letter_items":               "Dead-letter items: %d\n",
 	"health.readiness_marker":                "Readiness marker: %s\n",
@@ -190,13 +190,13 @@ var germanMessages = map[string]string{
 	"cli.config_warning_shared_webhook_url": "Konfigurationswarnung: die Webhook-Ziele %s verwenden dieselbe Webhook-URL; " +
 		"wo sich ihre Filter ueberschneiden, wird derselbe Alert pro Ziel einmal in diesen Kanal gepostet",
 	"cli.config_warning_manifest_unreadable": "Konfigurationswarnung: destinations.json konnte nicht gelesen werden (%s); " +
-		"die Endpunkt-Reihenfolge-Pruefung wurde fuer diesen Lauf uebersprungen",
+		"fruehere Endpunkt-Zuordnungen sind unbekannt. Stelle die Datei aus einem Backup wieder her oder starte einmal mit --accept-destination-remap, um die aktuelle Zuordnung zu akzeptieren",
 	"cli.config_valid": "Konfiguration gueltig",
 	"cli.destination_remap": "Ziel-Neuzuordnung erkannt (%s): %s. Gespeicherte Dedup-Marker, Retry-Eintraege und " +
 		"Dead-Letter-Eintraege sind an die Ziel-ID gebunden; ein Start mit dieser Konfiguration koennte Alerts eines " +
 		"Endpunkts stillschweigend unterdruecken und die eingereihten Nachrichten eines anderen Endpunkts an den " +
-		"falschen Webhook zustellen. Stelle die bisherige Reihenfolge der Endpunkte wieder her (neue Endpunkte nur " +
-		"am Ende von url/urls/targets anhaengen, nur am Ende loeschen) oder starte einmalig mit " +
+		"falschen Webhook zustellen. Stelle die bisherige Endpunkt-Zuordnung wieder her (und destinations.json " +
+		"aus einem Backup, falls die Datei nicht lesbar ist) oder starte einmalig mit " +
 		"--accept-destination-remap, um die neue Zuordnung zu akzeptieren und %s neu zu schreiben.\n",
 
 	"destination_remap.kind.reorder":                  "Endpunkte umsortiert",
@@ -206,7 +206,7 @@ var germanMessages = map[string]string{
 	"destination_remap.kind.previous_binding_unknown": "fruehere Endpunkt-Zuordnung unbekannt",
 
 	"health.data_dir":                        "Datenverzeichnis: %s\n",
-	"health.destination_manifest_unreadable": "Ziel-Manifest nicht lesbar (%s); die Endpunkt-Reihenfolge-Pruefung wurde fuer diesen Lauf uebersprungen\n",
+	"health.destination_manifest_unreadable": "Ziel-Manifest nicht lesbar (%s); stelle es aus einem Backup wieder her oder starte einmal mit --accept-destination-remap, um die aktuelle Zuordnung zu akzeptieren\n",
 	"health.retry_queue_items":               "Retry-Queue-Eintraege: %d\n",
 	"health.dead_letter_items":               "Dead-Letter-Eintraege: %d\n",
 	"health.readiness_marker":                "Readiness-Marker: %s\n",

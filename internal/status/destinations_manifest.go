@@ -35,11 +35,11 @@ const destinationRemapConsequence = "stored dedup markers, retry-queue rows and 
 	"destination ID; alerts for one endpoint could be suppressed and another endpoint's queued deliveries " +
 	"replayed to the wrong webhook"
 
-const destinationRemapRemedy = "restore the previous endpoint order (append new endpoints at the end of " +
-	"url/urls/targets, delete only from the end), or start once with --accept-destination-remap to accept " +
-	"the new mapping"
+const destinationRemapRemedy = "restore the previous endpoint mapping (and destinations.json from backup " +
+	"if unreadable), or start once with --accept-destination-remap to accept the new mapping"
 
 const destinationManifestSkippedCheck = "old endpoint bindings are unknown; new destination IDs require explicit acceptance"
+const destinationManifestUnreadableRemedy = "restore destinations.json from backup, or start once with --accept-destination-remap to accept the current mapping"
 
 // DestinationManifest binds active and removed positional IDs to webhook URL
 // hashes. UnknownIDs and Unattributed preserve uncertainty from version 1.
@@ -476,6 +476,7 @@ func DestinationManifestUnreadableFields(dataDir string, manifest DestinationMan
 	fields := log.Fields{
 		"manifest":    DestinationManifestPath(dataDir),
 		"consequence": destinationManifestSkippedCheck,
+		"remedy":      destinationManifestUnreadableRemedy,
 	}
 	if err != nil {
 		fields["reason"] = err.Error()

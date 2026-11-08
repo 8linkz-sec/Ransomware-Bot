@@ -380,6 +380,9 @@ func TestApplyDestinationManifestRequiresAcceptForCorruptManifest(t *testing.T) 
 	if code := applyDestinationManifest(cfg, cliOptions{}, &out, i18n.Default()); code != 1 {
 		t.Fatalf("applyDestinationManifest() = %d, want refusal for unknown bindings", code)
 	}
+	if !strings.Contains(out.String(), "parse destination manifest") || !strings.Contains(out.String(), "Restore the file from backup") {
+		t.Fatalf("startup refusal lacks unreadable reason or remedy: %q", out.String())
+	}
 
 	entry := findRootTestLogEntry(hook, "Destination manifest unreadable; accepting new bindings requires explicit operator approval")
 	if entry == nil {
@@ -921,6 +924,11 @@ func TestRunCheckConfigWarnsWhenDestinationManifestUnreadable(t *testing.T) {
 	if !strings.Contains(out.String(), "previous endpoint binding unknown") {
 		t.Fatalf("output missing the unknown-binding refusal:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "destinations.json could not be read") ||
+		!strings.Contains(out.String(), "parse destination manifest") ||
+		!strings.Contains(out.String(), "Restore the file from backup") {
+		t.Fatalf("output missing unreadable reason or remedy:\n%s", out.String())
+	}
 }
 
 // A corrupt manifest makes healthcheck report the pending refusal.
@@ -941,5 +949,10 @@ func TestRunHealthcheckWarnsWhenDestinationManifestUnreadable(t *testing.T) {
 	err := runHealthcheckWithMessages(configDir, dataDir, &out, i18n.ForLocale("en"))
 	if err == nil || !strings.Contains(err.Error(), "destination remap pending") {
 		t.Fatalf("runHealthcheckWithMessages() error = %v, want pending remap", err)
+	}
+	if !strings.Contains(err.Error(), "Destination manifest unreadable") ||
+		!strings.Contains(err.Error(), "parse destination manifest") ||
+		!strings.Contains(err.Error(), "restore it from backup") {
+		t.Fatalf("healthcheck lacks unreadable reason or remedy: %v", err)
 	}
 }

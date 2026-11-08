@@ -209,12 +209,12 @@ func runCheckConfig(opts cliOptions, out io.Writer, msg i18n.Messages) int {
 	// The only --check-config outcome that depends on data_dir state rather
 	// than on the config files alone.
 	diff, pending, manifestSkipped := pendingDestinationRemap(cfg, resolved)
+	if manifestSkipped != nil {
+		fmt.Fprintln(out, msg.Tf("cli.config_warning_manifest_unreadable", manifestSkipped.Error()))
+	}
 	if pending {
 		printDestinationRemap(out, msg, diff, status.DestinationManifestPath(resolved))
 		return 1
-	}
-	if manifestSkipped != nil {
-		fmt.Fprintln(out, msg.Tf("cli.config_warning_manifest_unreadable", manifestSkipped.Error()))
 	}
 	if enabledDeliveryTargets(cfg) == 0 {
 		fmt.Fprintln(out, msg.T("cli.config_warning_no_targets"))
@@ -299,6 +299,7 @@ func applyDestinationManifest(cfg *config.Config, opts cliOptions, out io.Writer
 	if err != nil {
 		log.WithFields(status.DestinationManifestUnreadableFields(cfg.DataDir, manifest, err)).
 			Warn("Destination manifest unreadable; accepting new bindings requires explicit operator approval")
+		fmt.Fprintln(out, msg.Tf("cli.config_warning_manifest_unreadable", err.Error()))
 		found = true
 	}
 
@@ -896,8 +897,12 @@ func runHealthcheckWithMessages(configDir, dataDirFlag string, out io.Writer, ms
 	// where it is printed, near the other health.* summary lines below.
 	diff, pending, manifestSkipped := pendingDestinationRemap(cfg, resolved)
 	if pending {
-		return fmt.Errorf(msg.T("health.destination_remap"),
+		remapErr := fmt.Errorf(msg.T("health.destination_remap"),
 			destinationRemapKindText(msg, diff), diff.Movements())
+		if manifestSkipped != nil {
+			return fmt.Errorf("%s: %w", strings.TrimSpace(msg.Tf("health.destination_manifest_unreadable", manifestSkipped.Error())), remapErr)
+		}
+		return remapErr
 	}
 	if err := checkReadinessMarkerWithMessages(out, msg); err != nil {
 		return err
