@@ -106,7 +106,12 @@ func TestPreviewRansomwareEntryExposesEmbedMetadata(t *testing.T) {
 	}
 
 	preview := PreviewRansomwareEntry(entry, &formatCfg)
+	assertRansomwarePreviewMetadata(t, preview)
+	assertRansomwarePreviewWebsiteField(t, preview)
+}
 
+func assertRansomwarePreviewMetadata(t *testing.T, preview map[string]any) {
+	t.Helper()
 	if preview["platform"] != "discord" || preview["kind"] != "ransomware" {
 		t.Fatalf("preview identity = %v/%v, want discord/ransomware", preview["platform"], preview["kind"])
 	}
@@ -131,6 +136,10 @@ func TestPreviewRansomwareEntryExposesEmbedMetadata(t *testing.T) {
 	if footer, ok := preview["footer"].(string); !ok || footer != discordRansomwareSourceLabel {
 		t.Fatalf("preview footer = %v, want %q", preview["footer"], discordRansomwareSourceLabel)
 	}
+}
+
+func assertRansomwarePreviewWebsiteField(t *testing.T, preview map[string]any) {
+	t.Helper()
 	fields, ok := preview["fields"].([]map[string]any)
 	if !ok || len(fields) == 0 {
 		t.Fatalf("preview fields = %#v, want non-empty field list", preview["fields"])

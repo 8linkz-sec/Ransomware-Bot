@@ -490,7 +490,12 @@ func TestFormatRansomwareEmbed_EmptyFieldsLayout(t *testing.T) {
 	if embed == nil {
 		t.Fatal("embed should not be nil")
 	}
+	assertRansomwareEmptyEmbedFields(t, embed, len(formatCfg.FieldOrder))
+	assertRansomwareEmptyEmbedDiscovered(t, embed)
+}
 
+func assertRansomwareEmptyEmbedFields(t *testing.T, embed *MessageEmbed, expectedFields int) {
+	t.Helper()
 	// The embed should have a title
 	if embed.Title == "" {
 		t.Error("embed title should not be empty")
@@ -503,7 +508,6 @@ func TestFormatRansomwareEmbed_EmptyFieldsLayout(t *testing.T) {
 	}
 
 	// We expect one field per entry in FieldOrder (10 fields)
-	expectedFields := len(formatCfg.FieldOrder)
 	if len(embed.Fields) != expectedFields {
 		t.Errorf("expected %d fields, got %d", expectedFields, len(embed.Fields))
 	}
@@ -521,7 +525,10 @@ func TestFormatRansomwareEmbed_EmptyFieldsLayout(t *testing.T) {
 	if placeholderCount != expectedPlaceholders {
 		t.Errorf("expected %d placeholder fields, got %d", expectedPlaceholders, placeholderCount)
 	}
+}
 
+func assertRansomwareEmptyEmbedDiscovered(t *testing.T, embed *MessageEmbed) {
+	t.Helper()
 	// Verify discovered has an actual formatted date, not a placeholder
 	discoveredFound := false
 	for _, f := range embed.Fields {

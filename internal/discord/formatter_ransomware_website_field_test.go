@@ -50,33 +50,38 @@ func TestFormatRansomwareEmbedWebsiteFieldNotDuplicatedWhenConfigured(t *testing
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			entry := api.RansomwareEntry{
-				Group:      "LockBit",
-				Victim:     "Example Corp",
-				WebsiteURL: "http://lockbitxyz123.onion/example-corp",
-			}
-			formatCfg := &notifyfmt.FormatOptions{
-				FieldOrder: []string{"group", "victim", tt.spelled},
-			}
-
-			embed := formatRansomwareEmbed(entry, formatCfg)
-
-			if embed.URL != "" {
-				t.Fatalf("embed.URL = %q, want empty (titles are never links)", embed.URL)
-			}
-			count := 0
-			for _, field := range embed.Fields {
-				if containsDiscordFieldValue([]*MessageEmbedField{field}, entry.WebsiteURL) {
-					count++
-				}
-			}
-			if count != 1 {
-				t.Fatalf("website-carrying field count = %d, want exactly 1: %#v", count, embed.Fields)
-			}
-			if got := discordFieldIndex(embed.Fields, "Website"); got != 2 {
-				t.Fatalf("Website field index = %d, want 2 (its configured position, not hoisted)", got)
-			}
+			assertRansomwareWebsiteFieldNotDuplicated(t, tt.spelled)
 		})
+	}
+}
+
+func assertRansomwareWebsiteFieldNotDuplicated(t *testing.T, spelling string) {
+	t.Helper()
+	entry := api.RansomwareEntry{
+		Group:      "LockBit",
+		Victim:     "Example Corp",
+		WebsiteURL: "http://lockbitxyz123.onion/example-corp",
+	}
+	formatCfg := &notifyfmt.FormatOptions{
+		FieldOrder: []string{"group", "victim", spelling},
+	}
+
+	embed := formatRansomwareEmbed(entry, formatCfg)
+
+	if embed.URL != "" {
+		t.Fatalf("embed.URL = %q, want empty (titles are never links)", embed.URL)
+	}
+	count := 0
+	for _, field := range embed.Fields {
+		if containsDiscordFieldValue([]*MessageEmbedField{field}, entry.WebsiteURL) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("website-carrying field count = %d, want exactly 1: %#v", count, embed.Fields)
+	}
+	if got := discordFieldIndex(embed.Fields, "Website"); got != 2 {
+		t.Fatalf("Website field index = %d, want 2 (its configured position, not hoisted)", got)
 	}
 }
 
