@@ -1426,7 +1426,7 @@ func TestProcessAPIRetryJobStopsWhenCancelledDuringSendDelay(t *testing.T) {
 	if got := slackSender.apiCallCount(); got != 0 {
 		t.Fatalf("API retry sends = %d, want 0 after cancellation during delay", got)
 	}
-	if entry := findTestLogEntry(hook, "Context cancelled during API retry send delay"); entry == nil {
-		t.Fatal("missing warn log for cancelled retry send delay")
+	if entry := findTestLogEntry(hook, "Context cancelled during API retry send delay"); entry == nil || entry.Data["skip_reason"] != "context_cancelled" {
+		t.Fatalf("missing cancel skip reason for API retry send delay: %+v", entry)
 	}
 }

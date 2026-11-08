@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -46,7 +47,7 @@ func (s *Scheduler) sendRSSEntryToTarget(
 
 	select {
 	case <-ctx.Done():
-		log.WithField("messenger", messenger).Warn(rssDeliveryCancelMessage(mode))
+		log.WithField("messenger", messenger).Warn(rssDeliveryCancelMessage(mode, ctx.Err()))
 		return rssDeliveryOutcomeCanceled
 	default:
 	}
@@ -175,16 +176,22 @@ func (s *Scheduler) sendRSSEntryToTarget(
 		return rssDeliveryOutcomeFailed
 	}
 	if !waitForSendDelay(ctx, delivery.delay) {
-		log.WithField("messenger", messenger).Warn(rssDeliveryDelayCancelMessage(mode))
+		log.WithField("messenger", messenger).Warn(rssDeliveryDelayCancelMessage(mode, ctx.Err()))
 		return rssDeliveryOutcomeCanceled
 	}
 
 	progressFields := webhookProgressFields(deliveryContext.index, deliveryContext.total, destinationID)
 	log.WithFields(progressFields).Info(rssDeliveryProgressMessage(mode))
+	sendStarted := false
 	err := s.sendWithWebhookLock(ctx, messenger, target.url, func() error {
+		sendStarted = true
 		return delivery.sender.SendRSSEntry(ctx, target.url, item.entry, feedType, config.NotificationFormatOptions(&cfg.Format))
 	})
 	if err != nil {
+		if !sendStarted && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			log.WithField("messenger", messenger).Warn(rssDeliveryCancelMessage(mode, err))
+			return rssDeliveryOutcomeCanceled
+		}
 		log.WithFields(webhookFailureFields(messenger, err, log.Fields{
 			"item_key":       item.key,
 			"destination_id": destinationID,
@@ -220,18 +227,18 @@ func (s *Scheduler) sendRSSEntryToTarget(
 	return rssDeliveryOutcomeSent
 }
 
-func rssDeliveryCancelMessage(mode rssDeliveryMode) string {
+func rssDeliveryCancelMessage(mode rssDeliveryMode, err error) string {
 	if mode == rssDeliveryModeRecovery {
-		return "Context cancelled, stopping RSS send"
+		return contextStopLogMessage(err, ", stopping RSS send")
 	}
-	return "Context cancelled, stopping RSS entry send"
+	return contextStopLogMessage(err, ", stopping RSS entry send")
 }
 
-func rssDeliveryDelayCancelMessage(mode rssDeliveryMode) string {
+func rssDeliveryDelayCancelMessage(mode rssDeliveryMode, err error) string {
 	if mode == rssDeliveryModeRecovery {
-		return "Context cancelled during RSS recovery send delay"
+		return contextStopLogMessage(err, " during RSS recovery send delay")
 	}
-	return "Context cancelled during RSS send delay"
+	return contextStopLogMessage(err, " during RSS send delay")
 }
 
 func rssDeliveryFilteredMessage(mode rssDeliveryMode) string {
@@ -817,7 +824,7 @@ func (s *Scheduler) sendRSSItemsToWebhookWithConfig(
 			log.WithFields(log.Fields{
 				"sent":      successCount,
 				"messenger": messenger,
-			}).Warn("Context cancelled, stopping RSS send")
+			}).Warn(contextStopLogMessage(ctx.Err(), ", stopping RSS send"))
 			return
 		default:
 		}
