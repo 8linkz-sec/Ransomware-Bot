@@ -111,21 +111,7 @@ func TestFormatRSSEmbedNeutralisesMaskedLinksInMarkdownSinks(t *testing.T) {
 
 	// Axis C: plain-text sinks stay unescaped. If a later change escapes them,
 	// these three assertions fail.
-	for _, sink := range []struct {
-		name  string
-		value string
-	}{
-		{"embed.Title", embed.Title},
-		{"embed.Footer.Text", embed.Footer.Text},
-		{"embed.Author.Name", embed.Author.Name},
-	} {
-		if strings.Contains(sink.value, `\`) {
-			t.Fatalf("%s: %q is a plain-text sink and must not be escaped", sink.name, sink.value)
-		}
-		if !liveMaskedLink(sink.value) {
-			t.Fatalf("%s: %q lost its raw markdown, plain-text sinks stay unchanged", sink.name, sink.value)
-		}
-	}
+	assertRSSPlainTextSinksKeepRawMarkdown(t, embed)
 
 	// The RED input for the no-op backslash rule: feed text that already
 	// contains backslashes. Without the `\` -> `\\` pair the escaper produces
@@ -199,6 +185,25 @@ func TestFormatRSSEmbedNeutralisesMaskedLinksInMarkdownSinks(t *testing.T) {
 		assertNoLiveMaskedLink(t, "Categories field", entityEmbed.Fields[index].Value)
 		assertEscapedBrackets(t, "Categories field", entityEmbed.Fields[index].Value)
 	})
+}
+
+func assertRSSPlainTextSinksKeepRawMarkdown(t *testing.T, embed *MessageEmbed) {
+	t.Helper()
+	for _, sink := range []struct {
+		name  string
+		value string
+	}{
+		{"embed.Title", embed.Title},
+		{"embed.Footer.Text", embed.Footer.Text},
+		{"embed.Author.Name", embed.Author.Name},
+	} {
+		if strings.Contains(sink.value, `\`) {
+			t.Fatalf("%s: %q is a plain-text sink and must not be escaped", sink.name, sink.value)
+		}
+		if !liveMaskedLink(sink.value) {
+			t.Fatalf("%s: %q lost its raw markdown, plain-text sinks stay unchanged", sink.name, sink.value)
+		}
+	}
 }
 
 // TestFormatRansomwareEmbedNeutralisesMaskedLinksInFieldValues covers the
