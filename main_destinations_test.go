@@ -84,55 +84,71 @@ func TestApplyDestinationManifestRefusesRemap(t *testing.T) {
 
 			var out bytes.Buffer
 			code := applyDestinationManifest(cfg, cliOptions{locale: tc.locale}, &out, i18n.ForLocale(tc.locale))
-			if code != 1 {
-				t.Fatalf("applyDestinationManifest() = %d, want 1; out=%q", code, out.String())
-			}
-			if !strings.Contains(out.String(), tc.want) {
-				t.Fatalf("stdout = %q, want it to contain %q", out.String(), tc.want)
-			}
-			if !strings.Contains(out.String(), "discord.ransomware<-discord.ransomware.2") {
-				t.Fatalf("stdout = %q, want the movement list", out.String())
-			}
-			if !strings.Contains(out.String(), status.DestinationManifestPath(dataDir)) {
-				t.Fatalf("stdout = %q, want the manifest path", out.String())
-			}
-
-			entry := findRootTestLogEntry(hook, "Refusing to start: webhook endpoints were remapped onto existing destination IDs")
-			if entry == nil {
-				t.Fatalf("missing refusal entry; entries=%v", rootTestLogMessages(hook))
-			}
-			if entry.Level != log.ErrorLevel {
-				t.Fatalf("refusal level = %v, want error", entry.Level)
-			}
-			for _, field := range []string{
-				"change", "affected_destination_ids", "movements", "new_destination_ids",
-				"removed_destination_ids", "manifest", "consequence", "remedy",
-			} {
-				if _, ok := entry.Data[field]; !ok {
-					t.Fatalf("refusal fields = %v, want %q", entry.Data, field)
-				}
-			}
-			if got := entry.Data["change"]; got != "reorder" {
-				t.Fatalf("change = %#v, want reorder", got)
-			}
-
-			combined := out.String() + logged.String()
-			for _, secret := range []string{
+			assertDestinationRefusalOutput(t, code, out.String(), tc.want, dataDir)
+			assertDestinationRefusalLog(t, hook)
+			assertDestinationOutputHasNoSecrets(t, out.String()+logged.String(), []string{
 				"/api/webhooks/", "secretAAAABBBBCCCC012345", "secretZZZZYYYYXXXX543210", "discord.com",
-			} {
-				if strings.Contains(combined, secret) {
-					t.Fatalf("output leaks %q:\n%s", secret, combined)
-				}
-			}
-
-			after, err := os.ReadFile(status.DestinationManifestPath(dataDir)) //nolint:gosec // temp dir under test control
-			if err != nil {
-				t.Fatalf("ReadFile(manifest) error = %v", err)
-			}
-			if string(after) != string(seeded) {
-				t.Fatal("a refused start rewrote the manifest")
-			}
+			})
+			assertDestinationManifestUnchanged(t, dataDir, seeded)
 		})
+	}
+}
+
+func assertDestinationRefusalOutput(t *testing.T, code int, output, want, dataDir string) {
+	t.Helper()
+	if code != 1 {
+		t.Fatalf("applyDestinationManifest() = %d, want 1; out=%q", code, output)
+	}
+	if !strings.Contains(output, want) {
+		t.Fatalf("stdout = %q, want it to contain %q", output, want)
+	}
+	if !strings.Contains(output, "discord.ransomware<-discord.ransomware.2") {
+		t.Fatalf("stdout = %q, want the movement list", output)
+	}
+	if !strings.Contains(output, status.DestinationManifestPath(dataDir)) {
+		t.Fatalf("stdout = %q, want the manifest path", output)
+	}
+}
+
+func assertDestinationRefusalLog(t *testing.T, hook *logtest.Hook) {
+	t.Helper()
+	entry := findRootTestLogEntry(hook, "Refusing to start: webhook endpoints were remapped onto existing destination IDs")
+	if entry == nil {
+		t.Fatalf("missing refusal entry; entries=%v", rootTestLogMessages(hook))
+	}
+	if entry.Level != log.ErrorLevel {
+		t.Fatalf("refusal level = %v, want error", entry.Level)
+	}
+	for _, field := range []string{
+		"change", "affected_destination_ids", "movements", "new_destination_ids",
+		"removed_destination_ids", "manifest", "consequence", "remedy",
+	} {
+		if _, ok := entry.Data[field]; !ok {
+			t.Fatalf("refusal fields = %v, want %q", entry.Data, field)
+		}
+	}
+	if got := entry.Data["change"]; got != "reorder" {
+		t.Fatalf("change = %#v, want reorder", got)
+	}
+}
+
+func assertDestinationOutputHasNoSecrets(t *testing.T, combined string, secrets []string) {
+	t.Helper()
+	for _, secret := range secrets {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("output leaks %q:\n%s", secret, combined)
+		}
+	}
+}
+
+func assertDestinationManifestUnchanged(t *testing.T, dataDir string, seeded []byte) {
+	t.Helper()
+	after, err := os.ReadFile(status.DestinationManifestPath(dataDir)) //nolint:gosec // temp dir under test control
+	if err != nil {
+		t.Fatalf("ReadFile(manifest) error = %v", err)
+	}
+	if string(after) != string(seeded) {
+		t.Fatal("a refused start rewrote the manifest")
 	}
 }
 
@@ -501,45 +517,46 @@ func TestRunCheckConfigRefusesDestinationRemapSubprocess(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cmd := exec.Command(os.Args[0], "-test.run=^TestRunCheckConfigRefusesDestinationRemapSubprocess$") //nolint:gosec // G204: re-execs this test binary with a fixed -test.run flag, not external input
-			cmd.Env = append(os.Environ(),
-				"DATA_DIR=",
-				"RANSOMWARE_BOT_CHECK_CONFIG_REMAP_HELPER=1",
-				"RANSOMWARE_BOT_TEST_CONFIG_DIR="+configDir,
-				"RANSOMWARE_BOT_TEST_DATA_DIR="+dataDir,
-				"RANSOMWARE_BOT_TEST_LOCALE="+tc.locale,
-			)
-			var stdout, stderr bytes.Buffer
-			cmd.Stdout = &stdout
-			cmd.Stderr = &stderr
-
-			err := cmd.Run()
-			if err == nil {
-				t.Fatalf("check-config exited 0, want 1; stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
-			}
-			exitErr, ok := err.(*exec.ExitError)
-			if !ok {
-				t.Fatalf("check-config error = %T %v; stdout:\n%s", err, err, stdout.String())
-			}
-			if exitErr.ExitCode() != 1 {
-				t.Fatalf("check-config exit code = %d, want 1; stdout:\n%s", exitErr.ExitCode(), stdout.String())
-			}
-
-			out := stdout.String()
-			combined := out + stderr.String()
-			if !strings.Contains(out, tc.wantText) {
-				t.Fatalf("stdout = %q, want %q on stdout", out, tc.wantText)
-			}
-			if strings.Contains(out, tc.wantAbsent) {
-				t.Fatalf("stdout = %q, want %q absent", out, tc.wantAbsent)
-			}
-			for _, secret := range []string{"/api/webhooks/", "secretAAAABBBBCCCC012345", "secretZZZZYYYYXXXX543210"} {
-				if strings.Contains(combined, secret) {
-					t.Fatalf("output leaks %q:\n%s", secret, combined)
-				}
-			}
+			assertCheckConfigRemapSubprocess(t, configDir, dataDir, tc.locale, tc.wantText, tc.wantAbsent)
 		})
 	}
+}
+
+func assertCheckConfigRemapSubprocess(t *testing.T, configDir, dataDir, locale, wantText, wantAbsent string) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunCheckConfigRefusesDestinationRemapSubprocess$") //nolint:gosec // G204: re-execs this test binary with a fixed -test.run flag, not external input
+	cmd.Env = append(os.Environ(),
+		"DATA_DIR=",
+		"RANSOMWARE_BOT_CHECK_CONFIG_REMAP_HELPER=1",
+		"RANSOMWARE_BOT_TEST_CONFIG_DIR="+configDir,
+		"RANSOMWARE_BOT_TEST_DATA_DIR="+dataDir,
+		"RANSOMWARE_BOT_TEST_LOCALE="+locale,
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err == nil {
+		t.Fatalf("check-config exited 0, want 1; stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("check-config error = %T %v; stdout:\n%s", err, err, stdout.String())
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Fatalf("check-config exit code = %d, want 1; stdout:\n%s", exitErr.ExitCode(), stdout.String())
+	}
+
+	out := stdout.String()
+	combined := out + stderr.String()
+	if !strings.Contains(out, wantText) {
+		t.Fatalf("stdout = %q, want %q on stdout", out, wantText)
+	}
+	if strings.Contains(out, wantAbsent) {
+		t.Fatalf("stdout = %q, want %q absent", out, wantAbsent)
+	}
+	assertDestinationOutputHasNoSecrets(t, combined, []string{"/api/webhooks/", "secretAAAABBBBCCCC012345", "secretZZZZYYYYXXXX543210"})
 }
 
 // TestRunHealthcheckReportsDestinationRemap pins that the remap check runs
@@ -567,39 +584,44 @@ func TestRunHealthcheckReportsDestinationRemap(t *testing.T) {
 	for _, tc := range tests {
 		for _, marker := range markers {
 			t.Run(tc.name+" with a "+marker.name, func(t *testing.T) {
-				tmpDir := t.TempDir()
-				configDir := filepath.Join(tmpDir, "configs")
-				dataDir := filepath.Join(tmpDir, "data")
-				writeDestinationSubprocessConfig(t, configDir, dataDir, "", destinationWebhookA, destinationWebhookB)
-				seedDestinationManifestFromConfigDir(t, configDir, dataDir)
-				writeDestinationSubprocessConfig(t, configDir, dataDir, "", destinationWebhookB, destinationWebhookA)
-
-				markerPath := filepath.Join(tmpDir, "ransomware-bot.ready")
-				if marker.stale {
-					if err := os.WriteFile(markerPath, []byte("stale"), 0600); err != nil {
-						t.Fatalf("WriteFile(marker) error = %v", err)
-					}
-				}
-				t.Setenv(readinessFileEnv, markerPath)
-
-				err := runHealthcheckWithMessages(configDir, dataDir, io.Discard, i18n.ForLocale(tc.locale))
-				if err == nil {
-					t.Fatal("runHealthcheckWithMessages() error = nil, want the pending remap")
-				}
-				if !strings.Contains(err.Error(), tc.want) {
-					t.Fatalf("error = %v, want it to contain %q", err, tc.want)
-				}
-				if !strings.Contains(err.Error(), "discord.ransomware<-discord.ransomware.2") {
-					t.Fatalf("error = %v, want the movement list", err)
-				}
-				if strings.Contains(err.Error(), "readiness marker") {
-					t.Fatalf("error = %v, want the remap reported before the readiness marker", err)
-				}
-				if strings.Contains(err.Error(), "/api/webhooks/") {
-					t.Fatalf("error = %v, want no webhook URL", err)
-				}
+				assertRemapHealthcheckBeforeReadiness(t, tc.locale, tc.want, marker.stale)
 			})
 		}
+	}
+}
+
+func assertRemapHealthcheckBeforeReadiness(t *testing.T, locale, want string, staleMarker bool) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, "configs")
+	dataDir := filepath.Join(tmpDir, "data")
+	writeDestinationSubprocessConfig(t, configDir, dataDir, "", destinationWebhookA, destinationWebhookB)
+	seedDestinationManifestFromConfigDir(t, configDir, dataDir)
+	writeDestinationSubprocessConfig(t, configDir, dataDir, "", destinationWebhookB, destinationWebhookA)
+
+	markerPath := filepath.Join(tmpDir, "ransomware-bot.ready")
+	if staleMarker {
+		if err := os.WriteFile(markerPath, []byte("stale"), 0600); err != nil {
+			t.Fatalf("WriteFile(marker) error = %v", err)
+		}
+	}
+	t.Setenv(readinessFileEnv, markerPath)
+
+	err := runHealthcheckWithMessages(configDir, dataDir, io.Discard, i18n.ForLocale(locale))
+	if err == nil {
+		t.Fatal("runHealthcheckWithMessages() error = nil, want the pending remap")
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v, want it to contain %q", err, want)
+	}
+	if !strings.Contains(err.Error(), "discord.ransomware<-discord.ransomware.2") {
+		t.Fatalf("error = %v, want the movement list", err)
+	}
+	if strings.Contains(err.Error(), "readiness marker") {
+		t.Fatalf("error = %v, want the remap reported before the readiness marker", err)
+	}
+	if strings.Contains(err.Error(), "/api/webhooks/") {
+		t.Fatalf("error = %v, want no webhook URL", err)
 	}
 }
 
