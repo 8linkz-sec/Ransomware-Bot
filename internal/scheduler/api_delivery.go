@@ -842,7 +842,7 @@ func (s *Scheduler) processAPIRetryQueue(ctx context.Context, allEntries []model
 		item := retryRecord.Item
 		select {
 		case <-ctx.Done():
-			log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, item.DestinationID, "context_done")).Warn("Context ended, stopping API retry queue processing")
+			log.WithFields(apiRetrySkipFields(item, retryRecord.QueueKey, item.DestinationID, apiRetryContextStopReason(ctx.Err()))).Warn("Context ended, stopping API retry queue processing")
 			return
 		default:
 		}
@@ -1003,7 +1003,7 @@ func (s *Scheduler) processAPIRetryJob(
 	item := job.item
 	select {
 	case <-ctx.Done():
-		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_done")).Warn("Context ended, stopping API retry queue processing")
+		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, apiRetryContextStopReason(ctx.Err()))).Warn("Context ended, stopping API retry queue processing")
 		return false
 	default:
 	}
@@ -1018,7 +1018,7 @@ func (s *Scheduler) processAPIRetryJob(
 		return true
 	}
 	if !waitForSendDelay(ctx, delivery.delay) {
-		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_done")).Warn("Context ended during API retry send delay")
+		log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, apiRetryContextStopReason(ctx.Err()))).Warn("Context ended during API retry send delay")
 		return false
 	}
 	sendStarted := false
@@ -1029,7 +1029,7 @@ func (s *Scheduler) processAPIRetryJob(
 
 	if err != nil {
 		if !sendStarted && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, "context_done")).Warn("Context ended before API retry send")
+			log.WithFields(apiRetrySkipFields(item, job.queueKey, job.destinationID, apiRetryContextStopReason(err))).Warn("Context ended before API retry send")
 			return false
 		}
 		log.WithFields(webhookFailureFields(item.Messenger, err, log.Fields{
@@ -1059,6 +1059,13 @@ func (s *Scheduler) processAPIRetryJob(
 		"messenger": item.Messenger,
 	}).Info("API retry send succeeded")
 	return true
+}
+
+func apiRetryContextStopReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "context_deadline_exceeded"
+	}
+	return "context_cancelled"
 }
 
 func apiRetrySkipFields(item status.RetryRecord, queueKey, destinationID, skipReason string) log.Fields {

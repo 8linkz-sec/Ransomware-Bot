@@ -8,6 +8,7 @@ import (
 	"github.com/8linkz-sec/Ransomware-News-Bot/internal/config"
 	"github.com/8linkz-sec/Ransomware-News-Bot/internal/model"
 	"github.com/8linkz-sec/Ransomware-News-Bot/internal/status"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 )
 
 // doneCallDeadlineContext models a deadline that fires at a chosen Done check.
@@ -21,15 +22,17 @@ func (c *doneCallDeadlineContext) Err() error {
 }
 
 func preSenderStopContexts() []struct {
-	name string
-	new  func(int) context.Context
+	name   string
+	new    func(int) context.Context
+	reason string
 } {
 	return []struct {
-		name string
-		new  func(int) context.Context
+		name   string
+		new    func(int) context.Context
+		reason string
 	}{
-		{name: "cancel", new: func(at int) context.Context { return newDoneCallCancelContext(at) }},
-		{name: "deadline", new: func(at int) context.Context {
+		{name: "cancel", reason: "context_cancelled", new: func(at int) context.Context { return newDoneCallCancelContext(at) }},
+		{name: "deadline", reason: "context_deadline_exceeded", new: func(at int) context.Context {
 			return &doneCallDeadlineContext{newDoneCallCancelContext(at)}
 		}},
 	}
@@ -67,6 +70,8 @@ func TestAPIPreSenderContextEndDoesNotCreateRetryAttempt(t *testing.T) {
 func TestAPIRetryPreSenderContextEndPreservesAttemptCount(t *testing.T) {
 	for _, stop := range preSenderStopContexts() {
 		t.Run(stop.name, func(t *testing.T) {
+			hook := logtest.NewGlobal()
+			defer hook.Reset()
 			s := newTestScheduler(t)
 			s.config.RetryMaxAttempts = 1
 			s.config.RetryWindow = time.Hour
@@ -102,6 +107,10 @@ func TestAPIRetryPreSenderContextEndPreservesAttemptCount(t *testing.T) {
 			}
 			if changed {
 				t.Fatal("pre-sender context end changed the retry row")
+			}
+			logEntry := findTestLogEntry(hook, "Context ended before API retry send")
+			if logEntry == nil || logEntry.Data["skip_reason"] != stop.reason {
+				t.Fatalf("pre-sender skip log = %+v, want reason %q", logEntry, stop.reason)
 			}
 			if got := sender.apiCallCount(); got != 0 {
 				t.Fatalf("sender calls = %d, want 0", got)
