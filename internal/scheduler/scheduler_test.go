@@ -3295,32 +3295,7 @@ func TestCheckRSSOnceUsesConditionalRSSHTTPValidators(t *testing.T) {
 	lastModified := "Wed, 21 Oct 2015 07:28:00 GMT"
 	var feedRequests atomic.Int32
 	feedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch feedRequests.Add(1) {
-		case 1:
-			if got := r.Header.Get("If-None-Match"); got != "" {
-				t.Errorf("first If-None-Match = %q, want empty", got)
-			}
-			if got := r.Header.Get("If-Modified-Since"); got != "" {
-				t.Errorf("first If-Modified-Since = %q, want empty", got)
-			}
-			w.Header().Set("Content-Type", "application/rss+xml")
-			w.Header().Set("ETag", `"rss-v1"`)
-			w.Header().Set("Last-Modified", lastModified)
-			_, _ = fmt.Fprint(w, schedulerRSSFeedXMLForTest(title, guid, link))
-		case 2:
-			if got := r.Header.Get("If-None-Match"); got != `"rss-v1"` {
-				t.Errorf("second If-None-Match = %q, want cached etag", got)
-			}
-			if got := r.Header.Get("If-Modified-Since"); got != lastModified {
-				t.Errorf("second If-Modified-Since = %q, want %q", got, lastModified)
-			}
-			w.Header().Set("ETag", `"rss-v1"`)
-			w.Header().Set("Last-Modified", lastModified)
-			w.WriteHeader(http.StatusNotModified)
-		default:
-			t.Errorf("unexpected feed request")
-			w.WriteHeader(http.StatusInternalServerError)
-		}
+		serveConditionalRSSValidatorRequest(t, w, r, feedRequests.Add(1), title, guid, link, lastModified)
 	}))
 	defer feedServer.Close()
 	allowLocalRSSFeedsForTest(t, s.rssParser, feedServer.Client())
@@ -3352,6 +3327,36 @@ func TestCheckRSSOnceUsesConditionalRSSHTTPValidators(t *testing.T) {
 	validators := s.statusTracker.GetRSSFeedHTTPValidators([]string{feedServer.URL})
 	if got := validators[feedServer.URL]; got.ETag != `"rss-v1"` || got.LastModified != lastModified {
 		t.Fatalf("cached validators = %+v, want etag and last-modified", got)
+	}
+}
+
+func serveConditionalRSSValidatorRequest(t *testing.T, w http.ResponseWriter, r *http.Request, requestNumber int32, title, guid, link, lastModified string) {
+	t.Helper()
+	switch requestNumber {
+	case 1:
+		if got := r.Header.Get("If-None-Match"); got != "" {
+			t.Errorf("first If-None-Match = %q, want empty", got)
+		}
+		if got := r.Header.Get("If-Modified-Since"); got != "" {
+			t.Errorf("first If-Modified-Since = %q, want empty", got)
+		}
+		w.Header().Set("Content-Type", "application/rss+xml")
+		w.Header().Set("ETag", `"rss-v1"`)
+		w.Header().Set("Last-Modified", lastModified)
+		_, _ = fmt.Fprint(w, schedulerRSSFeedXMLForTest(title, guid, link))
+	case 2:
+		if got := r.Header.Get("If-None-Match"); got != `"rss-v1"` {
+			t.Errorf("second If-None-Match = %q, want cached etag", got)
+		}
+		if got := r.Header.Get("If-Modified-Since"); got != lastModified {
+			t.Errorf("second If-Modified-Since = %q, want %q", got, lastModified)
+		}
+		w.Header().Set("ETag", `"rss-v1"`)
+		w.Header().Set("Last-Modified", lastModified)
+		w.WriteHeader(http.StatusNotModified)
+	default:
+		t.Errorf("unexpected feed request")
+		w.WriteHeader(http.StatusInternalServerError)
 	}
 }
 
@@ -7244,20 +7249,7 @@ func TestRecordWebhookDeliveryFailureHonorsRetryBudget(t *testing.T) {
 			RetryWindow:   time.Hour,
 		}, newRetryableError())
 
-		snapshot := s.statusTracker.RetryStatusSnapshot()
-		if snapshot.RetryQueueItems != 0 {
-			t.Fatalf("retry queue items = %d, want 0", snapshot.RetryQueueItems)
-		}
-		deadLetters := s.statusTracker.GetDeadLetterItems()
-		if len(deadLetters) != 1 {
-			t.Fatalf("dead letter count = %d, want 1", len(deadLetters))
-		}
-		if deadLetters[0].TerminalReason != status.TerminalReasonMaxAttempts {
-			t.Fatalf("TerminalReason = %q, want %q", deadLetters[0].TerminalReason, status.TerminalReasonMaxAttempts)
-		}
-		if deadLetters[0].RetryCount != 2 {
-			t.Fatalf("RetryCount = %d, want 2", deadLetters[0].RetryCount)
-		}
+		assertRetryBudgetDeadLetter(t, s)
 	})
 
 	t.Run("two retries keep the second failure queued", func(t *testing.T) {
@@ -7282,21 +7274,44 @@ func TestRecordWebhookDeliveryFailureHonorsRetryBudget(t *testing.T) {
 			RetryWindow:   time.Hour,
 		}, newRetryableError())
 
-		snapshot := s.statusTracker.RetryStatusSnapshot()
-		if snapshot.RetryQueueItems != 1 {
-			t.Fatalf("retry queue items = %d, want 1", snapshot.RetryQueueItems)
-		}
-		if deadLetters := s.statusTracker.GetDeadLetterItems(); len(deadLetters) != 0 {
-			t.Fatalf("dead letter count = %d, want 0", len(deadLetters))
-		}
-		queued := s.statusTracker.GetRetryItemsByType("api")
-		if len(queued) != 1 {
-			t.Fatalf("queued retry items = %d, want 1", len(queued))
-		}
-		if queued[0].RetryCount != 2 {
-			t.Fatalf("queued RetryCount = %d, want 2", queued[0].RetryCount)
-		}
+		assertRetryBudgetQueued(t, s)
 	})
+}
+
+func assertRetryBudgetDeadLetter(t *testing.T, s *Scheduler) {
+	t.Helper()
+	snapshot := s.statusTracker.RetryStatusSnapshot()
+	if snapshot.RetryQueueItems != 0 {
+		t.Fatalf("retry queue items = %d, want 0", snapshot.RetryQueueItems)
+	}
+	deadLetters := s.statusTracker.GetDeadLetterItems()
+	if len(deadLetters) != 1 {
+		t.Fatalf("dead letter count = %d, want 1", len(deadLetters))
+	}
+	if deadLetters[0].TerminalReason != status.TerminalReasonMaxAttempts {
+		t.Fatalf("TerminalReason = %q, want %q", deadLetters[0].TerminalReason, status.TerminalReasonMaxAttempts)
+	}
+	if deadLetters[0].RetryCount != 2 {
+		t.Fatalf("RetryCount = %d, want 2", deadLetters[0].RetryCount)
+	}
+}
+
+func assertRetryBudgetQueued(t *testing.T, s *Scheduler) {
+	t.Helper()
+	snapshot := s.statusTracker.RetryStatusSnapshot()
+	if snapshot.RetryQueueItems != 1 {
+		t.Fatalf("retry queue items = %d, want 1", snapshot.RetryQueueItems)
+	}
+	if deadLetters := s.statusTracker.GetDeadLetterItems(); len(deadLetters) != 0 {
+		t.Fatalf("dead letter count = %d, want 0", len(deadLetters))
+	}
+	queued := s.statusTracker.GetRetryItemsByType("api")
+	if len(queued) != 1 {
+		t.Fatalf("queued retry items = %d, want 1", len(queued))
+	}
+	if queued[0].RetryCount != 2 {
+		t.Fatalf("queued RetryCount = %d, want 2", queued[0].RetryCount)
+	}
 }
 
 // reanchorStoryVariantsForTest returns count link variants of one story. They
