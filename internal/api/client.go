@@ -428,63 +428,76 @@ func (c *Client) makeRequest(ctx context.Context, url string, target interface{}
 	if err := c.rateLimitCooldownError(time.Now()); err != nil {
 		return err
 	}
-
-	var lastErr error
-	var lastStatusCode int
-	var nextRetryDelay time.Duration
-	var useNextRetryDelay bool
 	policy := c.httpPolicy()
-
+	var state apiRequestAttemptState
 	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
-		// Check context before each attempt
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		if err := waitBeforeAPIRetry(ctx, attempt, url, policy.RetryBaseDelay, nextRetryDelay, useNextRetryDelay); err != nil {
+		complete, err := c.makeRequestAttempt(ctx, url, target, attempt, policy, &state)
+		if complete {
 			return err
 		}
-		if useNextRetryDelay {
-			useNextRetryDelay = false
-		}
-
-		req, err := c.newAuthenticatedGETRequest(ctx, url)
-		if err != nil {
-			return err
-		}
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			lastErr = fmt.Errorf("request failed: %w", err)
-			if retryableAPITransportError(err, attempt, policy.MaxAttempts) {
-				continue
-			}
-			return lastErr
-		}
-
-		result := handleAPIResponse(resp, target, attempt, policy.MaxAttempts)
-		lastStatusCode = result.statusCode
-		if result.retry {
-			lastErr = result.err
-			nextRetryDelay = result.retryDelay
-			useNextRetryDelay = result.useRetryDelay
-			if result.statusCode == http.StatusTooManyRequests && result.useRetryDelay && result.retryDelay > 0 {
-				c.setRateLimitCooldown(time.Now().Add(result.retryDelay))
-			}
-			continue
-		}
-		if result.err == nil {
-			c.clearRateLimitCooldown()
-		}
-		return result.err
 	}
-
-	if lastStatusCode == 0 {
-		return fmt.Errorf("failed after %d attempts: %w", policy.MaxAttempts, lastErr)
+	if state.lastStatusCode == 0 {
+		return fmt.Errorf("failed after %d attempts: %w", policy.MaxAttempts, state.lastErr)
 	}
-	return fmt.Errorf("failed after %d attempts (last status: %d): %w", policy.MaxAttempts, lastStatusCode, lastErr)
+	return fmt.Errorf("failed after %d attempts (last status: %d): %w", policy.MaxAttempts, state.lastStatusCode, state.lastErr)
+}
+
+type apiRequestAttemptState struct {
+	lastErr           error
+	lastStatusCode    int
+	nextRetryDelay    time.Duration
+	useNextRetryDelay bool
+}
+
+func (state *apiRequestAttemptState) waitForAttempt(ctx context.Context, attempt int, url string, retryBaseDelay time.Duration) error {
+	// Check context before each attempt, including the first.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if err := waitBeforeAPIRetry(ctx, attempt, url, retryBaseDelay, state.nextRetryDelay, state.useNextRetryDelay); err != nil {
+		return err
+	}
+	state.useNextRetryDelay = false
+	return nil
+}
+
+func (c *Client) makeRequestAttempt(ctx context.Context, url string, target interface{}, attempt int, policy HTTPPolicy, state *apiRequestAttemptState) (bool, error) {
+	if err := state.waitForAttempt(ctx, attempt, url, policy.RetryBaseDelay); err != nil {
+		return true, err
+	}
+	req, err := c.newAuthenticatedGETRequest(ctx, url)
+	if err != nil {
+		return true, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		state.lastErr = fmt.Errorf("request failed: %w", err)
+		if retryableAPITransportError(err, attempt, policy.MaxAttempts) {
+			return false, nil
+		}
+		return true, state.lastErr
+	}
+	result := handleAPIResponse(resp, target, attempt, policy.MaxAttempts)
+	state.lastStatusCode = result.statusCode
+	if result.retry {
+		c.recordAPIResponseRetry(result, state)
+		return false, nil
+	}
+	if result.err == nil {
+		c.clearRateLimitCooldown()
+	}
+	return true, result.err
+}
+
+func (c *Client) recordAPIResponseRetry(result apiResponseResult, state *apiRequestAttemptState) {
+	state.lastErr = result.err
+	state.nextRetryDelay = result.retryDelay
+	state.useNextRetryDelay = result.useRetryDelay
+	if result.statusCode == http.StatusTooManyRequests && result.useRetryDelay && result.retryDelay > 0 {
+		c.setRateLimitCooldown(time.Now().Add(result.retryDelay))
+	}
 }
 
 func retryableAPITransportError(err error, attempt, maxAttempts int) bool {

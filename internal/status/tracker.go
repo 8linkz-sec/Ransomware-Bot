@@ -2303,6 +2303,15 @@ func (t *Tracker) parsedRSSIndexesForFeedScopeReadLocked(feedType string, feedUR
 			indexes.add(idx)
 		}
 	}
+	t.addRSSFeedURLIndexes(&indexes, feedType, feedURLs)
+	if feedType != "" {
+		t.addRSSUntypedIndexes(&indexes, feedURLs)
+	}
+	sort.Ints(indexes.values)
+	return indexes.values
+}
+
+func (t *Tracker) addRSSFeedURLIndexes(indexes *parsedRSSIndexCollector, feedType string, feedURLs map[string]struct{}) {
 	for feedURL := range feedURLs {
 		for _, idx := range t.parsedFeedIndex[feedURL] {
 			entry := t.rssStatus.ParsedItems[idx]
@@ -2312,17 +2321,16 @@ func (t *Tracker) parsedRSSIndexesForFeedScopeReadLocked(feedType string, feedUR
 			indexes.add(idx)
 		}
 	}
-	if feedType != "" {
-		for _, idx := range t.parsedUntypedIndex {
-			entry := t.rssStatus.ParsedItems[idx]
-			if _, feedURLMatched := feedURLs[entry.FeedURL]; feedURLMatched {
-				continue
-			}
-			indexes.add(idx)
+}
+
+func (t *Tracker) addRSSUntypedIndexes(indexes *parsedRSSIndexCollector, feedURLs map[string]struct{}) {
+	for _, idx := range t.parsedUntypedIndex {
+		entry := t.rssStatus.ParsedItems[idx]
+		if _, feedURLMatched := feedURLs[entry.FeedURL]; feedURLMatched {
+			continue
 		}
+		indexes.add(idx)
 	}
-	sort.Ints(indexes.values)
-	return indexes.values
 }
 
 type parsedRSSIndexCollector struct {

@@ -506,31 +506,8 @@ func newSchedulerComponents(cfg *config.Config, configDir string, dryRun bool) (
 	}()
 
 	// Initialize status tracker FIRST (uses configured data directory outside dry-run)
-	retentionPolicy := statusRetentionPolicyForConfig(cfg)
-	if dryRun {
-		components.statusTracker = status.NewMemoryTrackerWithRetention(retentionPolicy)
-	} else {
-		components.dataDirLock, err = acquireDataDirLockFunc(cfg.DataDir)
-		if err != nil {
-			if dataDirAlreadyLocked(err) {
-				return nil, fmt.Errorf("failed to acquire data_dir lock: %w", err)
-			}
-			if dataDirLockUnsupported(err) {
-				log.WithError(err).WithField("data_dir", cfg.DataDir).Warn(dataDirLockUnsupportedWarning)
-			} else {
-				log.WithError(err).WithField("data_dir", cfg.DataDir).Warn("Data directory unavailable; continuing with in-memory status only")
-			}
-			components.statusTracker = status.NewMemoryTrackerWithRetention(retentionPolicy)
-		} else {
-			if shouldLoadAPIStatusAtStartup(cfg) {
-				components.statusTracker, err = status.NewTrackerWithRetention(cfg.DataDir, retentionPolicy)
-			} else {
-				components.statusTracker, err = status.NewTrackerWithRetentionLazyAPI(cfg.DataDir, retentionPolicy)
-			}
-			if err != nil {
-				return nil, fmt.Errorf("failed to create status tracker: %w", err)
-			}
-		}
+	if err := initializeSchedulerStatusTracker(components, cfg, dryRun); err != nil {
+		return nil, err
 	}
 
 	// Initialize RSS parser; persistent deduplication is owned by the scheduler.
@@ -555,6 +532,37 @@ func newSchedulerComponents(cfg *config.Config, configDir string, dryRun bool) (
 
 	cleanupOnError = false
 	return components, nil
+}
+
+func initializeSchedulerStatusTracker(components *schedulerComponents, cfg *config.Config, dryRun bool) error {
+	retentionPolicy := statusRetentionPolicyForConfig(cfg)
+	if dryRun {
+		components.statusTracker = status.NewMemoryTrackerWithRetention(retentionPolicy)
+		return nil
+	}
+	var err error
+	components.dataDirLock, err = acquireDataDirLockFunc(cfg.DataDir)
+	if err != nil {
+		if dataDirAlreadyLocked(err) {
+			return fmt.Errorf("failed to acquire data_dir lock: %w", err)
+		}
+		if dataDirLockUnsupported(err) {
+			log.WithError(err).WithField("data_dir", cfg.DataDir).Warn(dataDirLockUnsupportedWarning)
+		} else {
+			log.WithError(err).WithField("data_dir", cfg.DataDir).Warn("Data directory unavailable; continuing with in-memory status only")
+		}
+		components.statusTracker = status.NewMemoryTrackerWithRetention(retentionPolicy)
+		return nil
+	}
+	if shouldLoadAPIStatusAtStartup(cfg) {
+		components.statusTracker, err = status.NewTrackerWithRetention(cfg.DataDir, retentionPolicy)
+	} else {
+		components.statusTracker, err = status.NewTrackerWithRetentionLazyAPI(cfg.DataDir, retentionPolicy)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to create status tracker: %w", err)
+	}
+	return nil
 }
 
 func (c *schedulerComponents) close() {
@@ -1132,10 +1140,7 @@ func (s *Scheduler) applyReloadedConfig(newCfg *config.Config) (bool, error) {
 	}
 
 	var replacementRSSParser *rss.Parser
-	if oldCfg.RSSRetryCount != newCfg.RSSRetryCount ||
-		oldCfg.RSSRetryDelay != newCfg.RSSRetryDelay ||
-		oldCfg.RSSWorkerTimeout != newCfg.RSSWorkerTimeout ||
-		s.rssParser == nil {
+	if rssParserSettingsChanged(oldCfg, newCfg) || s.rssParser == nil {
 		replacementRSSParser = newRSSParserForConfig(newCfg)
 	}
 
@@ -1162,17 +1167,7 @@ func (s *Scheduler) applyReloadedConfig(newCfg *config.Config) (bool, error) {
 	auditConfigReloadChanges(oldCfg, newCfg)
 
 	if replacementAPIClient != nil {
-		oldClient := s.apiClient
-		s.apiClient = replacementAPIClient
-		if oldCfg.APIKey != newCfg.APIKey || oldCfg.APIBaseURL != newCfg.APIBaseURL {
-			s.apiAuthSuspension = apiAuthSuspension{}
-		}
-		if oldClient != nil {
-			if err := oldClient.Close(); err != nil {
-				log.WithError(err).Warn("Failed to close replaced API client")
-			}
-		}
-		log.Info("API client rebuilt after config reload")
+		s.applyReplacementAPIClient(oldCfg, newCfg, replacementAPIClient)
 	}
 
 	if replacementRSSParser != nil {
@@ -1184,6 +1179,47 @@ func (s *Scheduler) applyReloadedConfig(newCfg *config.Config) (bool, error) {
 		}).Info("RSS parser rebuilt after config reload")
 	}
 
+	s.updateReloadedIntervalsAndLogLevel(oldCfg, newCfg)
+
+	filter.ClearRegexCache()
+	pruneRSSFeedStatusForConfig(s.statusTracker, newCfg, s.dryRun)
+	// NOT under apiMu/rssMu unless a replacement client/parser was built above
+	// (:931-938) -- those locks are conditional, this write is not.
+	// applyReloadedConfig has two internal callers: runConfigWatcher (a single
+	// ticker-driven goroutine -- the only one actually wired into Start()) and
+	// the exported ReloadConfig() (no production caller today, but nothing
+	// stops a future one running concurrently with the watcher). Today's safety
+	// rests entirely on runConfigWatcher being the only caller anything in this
+	// binary invokes, plus status.WriteDestinationManifest writing atomically
+	// (temp+rename) to a path fixed by cfg.DataDir. If ReloadConfig() is ever
+	// wired to a second live trigger (admin endpoint, signal handler, ...), it
+	// must take its own lock around this call (or a dedicated manifest mutex).
+	s.writeDestinationManifestAfterReload(newCfg)
+
+	return true, nil
+}
+
+func rssParserSettingsChanged(oldCfg, newCfg *config.Config) bool {
+	return oldCfg.RSSRetryCount != newCfg.RSSRetryCount ||
+		oldCfg.RSSRetryDelay != newCfg.RSSRetryDelay ||
+		oldCfg.RSSWorkerTimeout != newCfg.RSSWorkerTimeout
+}
+
+func (s *Scheduler) applyReplacementAPIClient(oldCfg, newCfg *config.Config, replacementAPIClient *api.Client) {
+	oldClient := s.apiClient
+	s.apiClient = replacementAPIClient
+	if oldCfg.APIKey != newCfg.APIKey || oldCfg.APIBaseURL != newCfg.APIBaseURL {
+		s.apiAuthSuspension = apiAuthSuspension{}
+	}
+	if oldClient != nil {
+		if err := oldClient.Close(); err != nil {
+			log.WithError(err).Warn("Failed to close replaced API client")
+		}
+	}
+	log.Info("API client rebuilt after config reload")
+}
+
+func (s *Scheduler) updateReloadedIntervalsAndLogLevel(oldCfg, newCfg *config.Config) {
 	// Update tickers if intervals changed (nil-safe for calls before Start())
 	if oldCfg.APIPollInterval != newCfg.APIPollInterval && s.apiTicker != nil {
 		s.apiTicker.Reset(newCfg.APIPollInterval)
@@ -1202,23 +1238,6 @@ func (s *Scheduler) applyReloadedConfig(newCfg *config.Config) (bool, error) {
 			log.WithError(err).WithField("level", newCfg.LogLevel).Warn("Log level update failed")
 		}
 	}
-
-	filter.ClearRegexCache()
-	pruneRSSFeedStatusForConfig(s.statusTracker, newCfg, s.dryRun)
-	// NOT under apiMu/rssMu unless a replacement client/parser was built above
-	// (:931-938) -- those locks are conditional, this write is not.
-	// applyReloadedConfig has two internal callers: runConfigWatcher (a single
-	// ticker-driven goroutine -- the only one actually wired into Start()) and
-	// the exported ReloadConfig() (no production caller today, but nothing
-	// stops a future one running concurrently with the watcher). Today's safety
-	// rests entirely on runConfigWatcher being the only caller anything in this
-	// binary invokes, plus status.WriteDestinationManifest writing atomically
-	// (temp+rename) to a path fixed by cfg.DataDir. If ReloadConfig() is ever
-	// wired to a second live trigger (admin endpoint, signal handler, ...), it
-	// must take its own lock around this call (or a dedicated manifest mutex).
-	s.writeDestinationManifestAfterReload(newCfg)
-
-	return true, nil
 }
 
 // rejectDestinationRemapForReload refuses a reload that would move a webhook URL
@@ -1514,26 +1533,7 @@ func (s *Scheduler) checkAPIOnce(ctx context.Context) checkOutcome {
 	fetchErr := fetchCtx.Err()
 	fetchCancel()
 	if err != nil {
-		if isAPIAuthError(err) {
-			s.armAPIAuthSuspension(cfg.APIKey, now, err, pollFields)
-		} else {
-			s.apiAuthSuspension = apiAuthSuspension{}
-		}
-		logAPIDataError(err, pollFields)
-		if !s.dryRun {
-			s.statusTracker.UpdateAPIStatusWithErrorInfo(false, 0, api.OperatorErrorMessage(err), apiSourceErrorInfo(err))
-			s.persistStatus("api poll failure status")
-			if fetchErr == nil {
-				retryCtx, retryCancel := context.WithTimeout(ctx, checkTimeout)
-				s.processAPIRetryQueue(retryCtx, nil)
-				retryCancel()
-			}
-		}
-		// A shutdown cancellation is not a failed cycle: symmetric with
-		// processRSSFeedBatches' own errors.Is(err, context.Canceled)
-		// exemption, so Ctrl-C during --dry-run cannot report a false failure
-		// on the API side while the RSS side stays exempt (F5).
-		return checkOutcome{ran: true, ok: errors.Is(err, context.Canceled)}
+		return s.handleAPIFetchError(ctx, cfg, err, fetchErr, now, checkTimeout, pollFields)
 	}
 	if s.apiAuthSuspension.key != "" {
 		log.WithFields(pollFields).Info("Ransomware API authentication recovered; polling resumed")
@@ -1548,6 +1548,26 @@ func (s *Scheduler) checkAPIOnce(ctx context.Context) checkOutcome {
 
 	s.deliverAPIEntriesAndProcessRetries(ctx, cfg, allEntries, checkTimeout)
 	return checkOutcome{ran: true, ok: true}
+}
+
+func (s *Scheduler) handleAPIFetchError(ctx context.Context, cfg *config.Config, err, fetchErr error, now time.Time, checkTimeout time.Duration, pollFields log.Fields) checkOutcome {
+	if isAPIAuthError(err) {
+		s.armAPIAuthSuspension(cfg.APIKey, now, err, pollFields)
+	} else {
+		s.apiAuthSuspension = apiAuthSuspension{}
+	}
+	logAPIDataError(err, pollFields)
+	if !s.dryRun {
+		s.statusTracker.UpdateAPIStatusWithErrorInfo(false, 0, api.OperatorErrorMessage(err), apiSourceErrorInfo(err))
+		s.persistStatus("api poll failure status")
+		if fetchErr == nil {
+			retryCtx, retryCancel := context.WithTimeout(ctx, checkTimeout)
+			s.processAPIRetryQueue(retryCtx, nil)
+			retryCancel()
+		}
+	}
+	// Shutdown cancellation does not count as a failed API cycle.
+	return checkOutcome{ran: true, ok: errors.Is(err, context.Canceled)}
 }
 
 func logAPIDataError(err error, pollFields log.Fields) {
@@ -2814,43 +2834,10 @@ func (s *Scheduler) filterAndRecordNewRSSItems(feedResults *rss.FeedResults, fee
 		if len(entries) == 0 {
 			continue
 		}
-
-		parsedKeys := s.statusTracker.GetRSSParsedItemKeys(feedURL)
-		if parsedKeys == nil {
-			parsedKeys = make(map[string]struct{})
-		}
-		newEntries := entries[:0]
-		storedEntries := make(map[string]status.StoredRSSEntry)
-		for _, entry := range entries {
-			key := rss.GenerateEntryKeyForEntry(entry)
-			if key == "" {
-				continue
-			}
-
-			alreadyParsed := false
-			for _, lookupKey := range rss.GenerateEntryLookupKeysForEntry(entry) {
-				if _, exists := parsedKeys[lookupKey]; exists {
-					alreadyParsed = true
-					break
-				}
-			}
-			if alreadyParsed {
-				skipped++
-				continue
-			}
-
-			stored := status.StoredRSSEntryFromRSS(entry, key)
-			stored.FeedType = feedType
-			storedEntries[key] = stored
-			parsedKeys[key] = struct{}{}
-			newEntries = append(newEntries, entry)
-			recorded++
-		}
-
-		if len(storedEntries) > 0 {
-			s.statusTracker.MarkRSSItemsParsed(feedURL, storedEntries)
-		}
+		newEntries, feedRecorded, feedSkipped := s.filterAndRecordRSSFeedItems(feedURL, entries, feedType)
 		feedResults.Entries[feedURL] = newEntries
+		recorded += feedRecorded
+		skipped += feedSkipped
 	}
 
 	if recorded > 0 || skipped > 0 {
@@ -2862,6 +2849,45 @@ func (s *Scheduler) filterAndRecordNewRSSItems(feedResults *rss.FeedResults, fee
 		}).Debug("Filtered and recorded parsed RSS items")
 	}
 	return recorded
+}
+
+func (s *Scheduler) filterAndRecordRSSFeedItems(feedURL string, entries []model.RSSEntry, feedType string) ([]model.RSSEntry, int, int) {
+	parsedKeys := s.statusTracker.GetRSSParsedItemKeys(feedURL)
+	if parsedKeys == nil {
+		parsedKeys = make(map[string]struct{})
+	}
+	newEntries := entries[:0]
+	storedEntries := make(map[string]status.StoredRSSEntry)
+	recorded, skipped := 0, 0
+	for _, entry := range entries {
+		key := rss.GenerateEntryKeyForEntry(entry)
+		if key == "" {
+			continue
+		}
+		if rssEntryAlreadyParsed(entry, parsedKeys) {
+			skipped++
+			continue
+		}
+		stored := status.StoredRSSEntryFromRSS(entry, key)
+		stored.FeedType = feedType
+		storedEntries[key] = stored
+		parsedKeys[key] = struct{}{}
+		newEntries = append(newEntries, entry)
+		recorded++
+	}
+	if len(storedEntries) > 0 {
+		s.statusTracker.MarkRSSItemsParsed(feedURL, storedEntries)
+	}
+	return newEntries, recorded, skipped
+}
+
+func rssEntryAlreadyParsed(entry model.RSSEntry, parsedKeys map[string]struct{}) bool {
+	for _, lookupKey := range rss.GenerateEntryLookupKeysForEntry(entry) {
+		if _, exists := parsedKeys[lookupKey]; exists {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scheduler) recordParsedRSSFeedTypes(feedResults *rss.FeedResults, feedType string) int {

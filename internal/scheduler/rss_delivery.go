@@ -289,28 +289,8 @@ func (s *Scheduler) sendParsedRSSToWebhooksWithConfig(
 	targets []webhookTarget,
 	attemptedRSSDeliveries rssDeliveryAttemptSet,
 ) {
-	// Collect and sort all entries chronologically
-	var allEntries []model.RSSEntry
-	for feedURL, entries := range feedResults.Entries {
-		// Update feed status: success for feeds without errors, failure for feeds with errors
-		if !s.dryRun {
-			if errMsg, failed := feedResults.FeedErrors[feedURL]; failed {
-				operatorError := rss.OperatorErrorMessageFromString(errMsg)
-				s.statusTracker.UpdateFeedStatusWithErrorInfo(feedURL, false, 0, operatorError, rssSourceErrorInfoFromString(errMsg))
-			} else {
-				s.statusTracker.UpdateFeedStatusWithErrorInfoAndValidators(
-					feedURL,
-					true,
-					len(entries),
-					"",
-					status.SourceErrorInfo{},
-					feedResults.FeedValidators[feedURL],
-				)
-			}
-		}
-
-		allEntries = append(allEntries, entries...)
-	}
+	// Collect and sort all entries chronologically.
+	allEntries := s.collectParsedRSSEntries(feedResults)
 	if !s.dryRun {
 		s.persistStatus("rss entries marked parsed")
 	}
@@ -366,6 +346,11 @@ func (s *Scheduler) sendParsedRSSToWebhooksWithConfig(
 		attemptedRSSDeliveries[rssDeliveryAttemptKey(itemKey, destinationID)] = struct{}{}
 	}
 
+	markers := rssFreshAttemptMarkers{
+		markEntries: markAttemptedEntries,
+		markEntry:   markAttemptedEntry,
+	}
+
 	var targetWG sync.WaitGroup
 	// Send each entry to each webhook target (per-webhook dedup). Targets are
 	// independent destinations, so one slow provider should not block another.
@@ -374,78 +359,7 @@ func (s *Scheduler) sendParsedRSSToWebhooksWithConfig(
 		targetWG.Add(1)
 		go func() {
 			defer targetWG.Done()
-
-			destinationID := targetDestinationID(target)
-			// Skip this webhook if quiet hours are active
-			if target.quietHours.IsActive() {
-				log.WithFields(log.Fields{
-					"messenger": target.messenger,
-					"feed_type": feedType,
-					"start":     target.quietHours.Start,
-					"end":       target.quietHours.End,
-				}).Info("Quiet hours active, skipping RSS send for this webhook")
-				s.recordRSSQuietHoursDeferredEntries(allEntries, feedType, target, rssDeliveryModeFresh, cfg.RSSMaxEntriesPerCycle)
-				return
-			}
-			successCount := 0
-			filteredCount := 0
-			entriesForTarget, cappedCount := limitRSSEntriesForCycle(allEntries, cfg.RSSMaxEntriesPerCycle)
-			if cappedCount > 0 {
-				markAttemptedEntries(allEntries[len(entriesForTarget):], destinationID)
-				log.WithFields(log.Fields{
-					"feed_type":        feedType,
-					"messenger":        target.messenger,
-					"cycle_limit":      cfg.RSSMaxEntriesPerCycle,
-					"deferred_by_cap":  cappedCount,
-					"send_batch_count": len(entriesForTarget),
-				}).Info("Capping RSS fresh send batch for this webhook")
-			}
-			for i, entry := range entriesForTarget {
-				switch s.sendRSSEntryToTarget(
-					ctx,
-					cfg,
-					feedType,
-					target,
-					freshRSSDeliveryItem(entry), rssDeliveryContext{
-						mode:          rssDeliveryModeFresh,
-						index:         i,
-						total:         len(entriesForTarget),
-						markAttempted: markAttemptedEntry,
-					},
-				) {
-				case rssDeliveryOutcomeSent:
-					successCount++
-				case rssDeliveryOutcomeFiltered:
-					filteredCount++
-				case rssDeliveryOutcomeCanceled:
-					return
-				}
-			}
-
-			log.WithFields(log.Fields{
-				"total_sent":      successCount,
-				"filtered_count":  filteredCount,
-				"total_items":     len(entriesForTarget),
-				"deferred_by_cap": cappedCount,
-				"feed_type":       feedType,
-				"messenger":       target.messenger,
-			}).Info("RSS entries send to webhook completed")
-			if s.dryRun && successCount == 0 {
-				log.WithFields(log.Fields{
-					"feed_type":       feedType,
-					"feed_count":      len(feedResults.Entries),
-					"messenger":       target.messenger,
-					"destination_id":  targetDestinationID(target),
-					"item_type":       status.RetryItemTypeRSS.String(),
-					"new_entry_count": len(allEntries),
-					"preview_count":   0,
-					"filtered_count":  filteredCount,
-					"total_items":     len(entriesForTarget),
-					"deferred_by_cap": cappedCount,
-					"mode":            dryRunModeLabel,
-					"hint":            "No RSS entries matched this target; check webhook filters, sent status, and freshness limits.",
-				}).Info("[DRY-RUN] No RSS entries matched target preview")
-			}
+			s.sendFreshRSSForTarget(ctx, cfg, feedResults, feedType, target, allEntries, markers)
 		}()
 	}
 	targetWG.Wait()
@@ -456,6 +370,116 @@ func (s *Scheduler) sendParsedRSSToWebhooksWithConfig(
 
 		// Flush all pending changes to disk (batched instead of per-item)
 		s.persistStatus("rss delivery flushed")
+	}
+}
+
+func (s *Scheduler) collectParsedRSSEntries(feedResults *rss.FeedResults) []model.RSSEntry {
+	var allEntries []model.RSSEntry
+	for feedURL, entries := range feedResults.Entries {
+		if !s.dryRun {
+			if errMsg, failed := feedResults.FeedErrors[feedURL]; failed {
+				operatorError := rss.OperatorErrorMessageFromString(errMsg)
+				s.statusTracker.UpdateFeedStatusWithErrorInfo(feedURL, false, 0, operatorError, rssSourceErrorInfoFromString(errMsg))
+			} else {
+				s.statusTracker.UpdateFeedStatusWithErrorInfoAndValidators(
+					feedURL,
+					true,
+					len(entries),
+					"",
+					status.SourceErrorInfo{},
+					feedResults.FeedValidators[feedURL],
+				)
+			}
+		}
+		allEntries = append(allEntries, entries...)
+	}
+	return allEntries
+}
+
+type rssFreshAttemptMarkers struct {
+	markEntries func([]model.RSSEntry, string)
+	markEntry   func(string, string)
+}
+
+func (s *Scheduler) sendFreshRSSForTarget(
+	ctx context.Context,
+	cfg *config.Config,
+	feedResults *rss.FeedResults,
+	feedType string,
+	target webhookTarget,
+	allEntries []model.RSSEntry,
+	markers rssFreshAttemptMarkers,
+) {
+	destinationID := targetDestinationID(target)
+	// Skip this webhook if quiet hours are active
+	if target.quietHours.IsActive() {
+		log.WithFields(log.Fields{
+			"messenger": target.messenger,
+			"feed_type": feedType,
+			"start":     target.quietHours.Start,
+			"end":       target.quietHours.End,
+		}).Info("Quiet hours active, skipping RSS send for this webhook")
+		s.recordRSSQuietHoursDeferredEntries(allEntries, feedType, target, rssDeliveryModeFresh, cfg.RSSMaxEntriesPerCycle)
+		return
+	}
+	successCount := 0
+	filteredCount := 0
+	entriesForTarget, cappedCount := limitRSSEntriesForCycle(allEntries, cfg.RSSMaxEntriesPerCycle)
+	if cappedCount > 0 {
+		markers.markEntries(allEntries[len(entriesForTarget):], destinationID)
+		log.WithFields(log.Fields{
+			"feed_type":        feedType,
+			"messenger":        target.messenger,
+			"cycle_limit":      cfg.RSSMaxEntriesPerCycle,
+			"deferred_by_cap":  cappedCount,
+			"send_batch_count": len(entriesForTarget),
+		}).Info("Capping RSS fresh send batch for this webhook")
+	}
+	for i, entry := range entriesForTarget {
+		switch s.sendRSSEntryToTarget(
+			ctx,
+			cfg,
+			feedType,
+			target,
+			freshRSSDeliveryItem(entry), rssDeliveryContext{
+				mode:          rssDeliveryModeFresh,
+				index:         i,
+				total:         len(entriesForTarget),
+				markAttempted: markers.markEntry,
+			},
+		) {
+		case rssDeliveryOutcomeSent:
+			successCount++
+		case rssDeliveryOutcomeFiltered:
+			filteredCount++
+		case rssDeliveryOutcomeCanceled:
+			return
+		}
+	}
+
+	log.WithFields(log.Fields{
+		"total_sent":      successCount,
+		"filtered_count":  filteredCount,
+		"total_items":     len(entriesForTarget),
+		"deferred_by_cap": cappedCount,
+		"feed_type":       feedType,
+		"messenger":       target.messenger,
+	}).Info("RSS entries send to webhook completed")
+	if s.dryRun && successCount == 0 {
+		log.WithFields(log.Fields{
+			"feed_type":       feedType,
+			"feed_count":      len(feedResults.Entries),
+			"messenger":       target.messenger,
+			"destination_id":  targetDestinationID(target),
+			"item_type":       status.RetryItemTypeRSS.String(),
+			"new_entry_count": len(allEntries),
+			"preview_count":   0,
+			"filtered_count":  filteredCount,
+			"total_items":     len(entriesForTarget),
+			"deferred_by_cap": cappedCount,
+			"mode":            dryRunModeLabel,
+			"hint":            "No RSS entries matched this target; check webhook filters, sent status, and freshness limits.",
+		}).Info("[DRY-RUN] No RSS entries matched target preview")
 	}
 }
 
@@ -489,79 +513,90 @@ func (s *Scheduler) sendUnsentRSSItemsWithConfig(
 			targetWG.Add(1)
 			go func() {
 				defer targetWG.Done()
-
-				destinationID := targetDestinationID(target)
-				unsentItems := s.statusTracker.GetUnsentRSSRecoveryItemsForDestinationFeedType(
-					destinationID,
-					feedType,
-					feedURLScope,
-					target.url,
-				)
-				if len(unsentItems) == 0 {
-					return
-				}
-
-				// Skip this webhook if quiet hours are active
-				if target.quietHours.IsActive() {
-					log.WithFields(log.Fields{
-						"messenger":    target.messenger,
-						"feed_type":    feedType,
-						"start":        target.quietHours.Start,
-						"end":          target.quietHours.End,
-						"unsent_count": len(unsentItems),
-					}).Info("Quiet hours active, skipping unsent RSS recovery for this webhook")
-					s.recordRSSQuietHoursDeferredItems(unsentItems, feedType, target, rssDeliveryModeRecovery, cfg.RSSMaxEntriesPerCycle)
-					return
-				}
-
-				// Prefer persisted feed type. The feed URL map is only a legacy
-				// fallback for status files written before feed_type existed.
-				var filteredItems []status.UnsentRSSItem
-				for _, item := range unsentItems {
-					itemFeedType := storedRSSItemFeedType(item, feedTypeMap)
-					if itemFeedType == "" {
-						log.WithFields(log.Fields{
-							"item_key":       item.Key,
-							"feed_url":       textutil.RedactURLCredentials(item.FeedURL),
-							"feed_type":      feedType,
-							"destination_id": destinationID,
-							"messenger":      target.messenger,
-							"skip_reason":    "unmapped_feed_type",
-						}).Warn("Skipping RSS recovery item whose feed is no longer mapped to a feed type")
-						continue
-					}
-					if itemFeedType == feedType {
-						filteredItems = append(filteredItems, item)
-					}
-				}
-				filteredItems = s.filterAttemptedRSSItems(filteredItems, destinationID, attemptedRSSDeliveries)
-				filteredItems = s.filterDeadLetteredRSSItems(filteredItems, target.messenger, destinationID, target.url)
-
-				if len(filteredItems) == 0 {
-					return
-				}
-				sendBatch, cappedCount := limitUnsentRSSItemsForCycle(filteredItems, cfg.RSSMaxEntriesPerCycle, cfg)
-
-				log.WithFields(log.Fields{
-					"unsent_count":     len(filteredItems),
-					"feed_type":        feedType,
-					"messenger":        target.messenger,
-					"cycle_limit":      cfg.RSSMaxEntriesPerCycle,
-					"deferred_by_cap":  cappedCount,
-					"send_batch_count": len(sendBatch),
-				}).Info("Found unsent RSS items for webhook, sending")
-
-				s.sendRSSItemsToWebhookWithConfig(
-					ctx,
-					cfg,
-					sendBatch,
-					feedType,
-					target,
-				)
+				s.sendUnsentRSSForTarget(ctx, cfg, feedType, target, feedURLScope, feedTypeMap, attemptedRSSDeliveries)
 			}()
 		}
 		targetWG.Wait()
 	}
+}
+
+func (s *Scheduler) sendUnsentRSSForTarget(
+	ctx context.Context,
+	cfg *config.Config,
+	feedType string,
+	target webhookTarget,
+	feedURLScope map[string]struct{},
+	feedTypeMap map[string]string,
+	attemptedRSSDeliveries rssDeliveryAttemptSet,
+) {
+	destinationID := targetDestinationID(target)
+	unsentItems := s.statusTracker.GetUnsentRSSRecoveryItemsForDestinationFeedType(
+		destinationID,
+		feedType,
+		feedURLScope,
+		target.url,
+	)
+	if len(unsentItems) == 0 {
+		return
+	}
+
+	// Skip this webhook if quiet hours are active
+	if target.quietHours.IsActive() {
+		log.WithFields(log.Fields{
+			"messenger":    target.messenger,
+			"feed_type":    feedType,
+			"start":        target.quietHours.Start,
+			"end":          target.quietHours.End,
+			"unsent_count": len(unsentItems),
+		}).Info("Quiet hours active, skipping unsent RSS recovery for this webhook")
+		s.recordRSSQuietHoursDeferredItems(unsentItems, feedType, target, rssDeliveryModeRecovery, cfg.RSSMaxEntriesPerCycle)
+		return
+	}
+
+	// Prefer persisted feed type. The feed URL map is only a legacy
+	// fallback for status files written before feed_type existed.
+	var filteredItems []status.UnsentRSSItem
+	for _, item := range unsentItems {
+		itemFeedType := storedRSSItemFeedType(item, feedTypeMap)
+		if itemFeedType == "" {
+			log.WithFields(log.Fields{
+				"item_key":       item.Key,
+				"feed_url":       textutil.RedactURLCredentials(item.FeedURL),
+				"feed_type":      feedType,
+				"destination_id": destinationID,
+				"messenger":      target.messenger,
+				"skip_reason":    "unmapped_feed_type",
+			}).Warn("Skipping RSS recovery item whose feed is no longer mapped to a feed type")
+			continue
+		}
+		if itemFeedType == feedType {
+			filteredItems = append(filteredItems, item)
+		}
+	}
+	filteredItems = s.filterAttemptedRSSItems(filteredItems, destinationID, attemptedRSSDeliveries)
+	filteredItems = s.filterDeadLetteredRSSItems(filteredItems, target.messenger, destinationID, target.url)
+
+	if len(filteredItems) == 0 {
+		return
+	}
+	sendBatch, cappedCount := limitUnsentRSSItemsForCycle(filteredItems, cfg.RSSMaxEntriesPerCycle, cfg)
+
+	log.WithFields(log.Fields{
+		"unsent_count":     len(filteredItems),
+		"feed_type":        feedType,
+		"messenger":        target.messenger,
+		"cycle_limit":      cfg.RSSMaxEntriesPerCycle,
+		"deferred_by_cap":  cappedCount,
+		"send_batch_count": len(sendBatch),
+	}).Info("Found unsent RSS items for webhook, sending")
+
+	s.sendRSSItemsToWebhookWithConfig(
+		ctx,
+		cfg,
+		sendBatch,
+		feedType,
+		target,
+	)
 }
 
 func stringSetFromSlice(values []string) map[string]struct{} {

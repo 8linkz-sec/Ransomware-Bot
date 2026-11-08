@@ -745,51 +745,59 @@ func RedactWebhookSecretsForURL(text, webhookURL string) string {
 	}
 	parsed, err := url.Parse(normalized)
 	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
-		marker := parsed.Scheme + "://" + parsed.Host + redactedWebhookPath(parsed.Path)
-		// F5, P2 (found 2026-09-04, sixth round on this defect class): this
-		// SUCCESS branch trusted parsed.Host/parsed.Path unconditionally --
-		// the FAILURE branch's rawWebhookSchemeHost (F1, above) exists
-		// precisely because net/url's authority-truncation-at-first-'/' bug
-		// can hand back a userinfo credential AS the host, but that bug does
-		// not require url.Parse to fail: a userinfo shaped like
-		// "TOKEN/pathlike@realhost" with no ':' in it parses as a perfectly
-		// valid bare hostname ("TOKEN") with parsed.User == nil, so
-		// url.Parse SUCCEEDS -- there is no *url.Error here for tier two's
-		// raw/%q ReplaceAll passes to even run against, and the credential
-		// reaches the marker directly, unredacted, on every call (an
-		// ordinary, error-free success, not just a validation failure).
-		// realAuthorityCandidate reruns the identical last-'@'-wins raw scan
-		// on normalized and disagrees with parsed.Host exactly when this
-		// shape is present; trust its answer over parsed.Host/parsed.Path in
-		// that case. See realAuthorityCandidate's own doc comment for why
-		// the query/fragment are excluded from that scan (so an unrelated
-		// '@' in a query value, e.g. an email address, cannot false-positive
-		// this and downgrade an already-correct parsed.Host).
-		if rawScheme, rawHost, mismatched := realAuthorityCandidate(normalized, parsed); mismatched {
-			marker = redactedURLMarker
-			if isLogSafeHost(rawHost) {
-				marker = rawScheme + "://" + rawHost + redactedPathMarker
-			}
-		}
-		redacted := strings.ReplaceAll(text, normalized, marker)
-		// Same %q-escaped-form pass the fallback's tier two runs below, and
-		// for the identical reason: text is normally (*url.Error).Error(),
-		// which renders with %q, so a normalized containing a backslash or
-		// double quote survives into text as two printable characters (\\ or
-		// \") that the raw ReplaceAll above cannot match. See the doc
-		// comment above for why this branch needed its own pass (F3, found
-		// 2026-09-04, third instance of this defect class).
-		redacted = replaceQuotedForm(redacted, normalized, marker)
-		if parsed.RawPath != "" {
-			rawURL := *parsed
-			rawURL.RawQuery = ""
-			rawURL.Fragment = ""
-			rawURLString := rawURL.String()
-			redacted = strings.ReplaceAll(redacted, rawURLString, marker)
-			redacted = replaceQuotedForm(redacted, rawURLString, marker)
-		}
-		return RedactWebhookSecrets(redacted)
+		return redactParseableWebhookURL(text, normalized, parsed)
 	}
+	return redactUnparseableWebhookURL(text, normalized, err)
+}
+
+func redactParseableWebhookURL(text, normalized string, parsed *url.URL) string {
+	marker := parsed.Scheme + "://" + parsed.Host + redactedWebhookPath(parsed.Path)
+	// F5, P2 (found 2026-09-04, sixth round on this defect class): this
+	// SUCCESS branch trusted parsed.Host/parsed.Path unconditionally --
+	// the FAILURE branch's rawWebhookSchemeHost (F1, above) exists
+	// precisely because net/url's authority-truncation-at-first-'/' bug
+	// can hand back a userinfo credential AS the host, but that bug does
+	// not require url.Parse to fail: a userinfo shaped like
+	// "TOKEN/pathlike@realhost" with no ':' in it parses as a perfectly
+	// valid bare hostname ("TOKEN") with parsed.User == nil, so
+	// url.Parse SUCCEEDS -- there is no *url.Error here for tier two's
+	// raw/%q ReplaceAll passes to even run against, and the credential
+	// reaches the marker directly, unredacted, on every call (an
+	// ordinary, error-free success, not just a validation failure).
+	// realAuthorityCandidate reruns the identical last-'@'-wins raw scan
+	// on normalized and disagrees with parsed.Host exactly when this
+	// shape is present; trust its answer over parsed.Host/parsed.Path in
+	// that case. See realAuthorityCandidate's own doc comment for why
+	// the query/fragment are excluded from that scan (so an unrelated
+	// '@' in a query value, e.g. an email address, cannot false-positive
+	// this and downgrade an already-correct parsed.Host).
+	if rawScheme, rawHost, mismatched := realAuthorityCandidate(normalized, parsed); mismatched {
+		marker = redactedURLMarker
+		if isLogSafeHost(rawHost) {
+			marker = rawScheme + "://" + rawHost + redactedPathMarker
+		}
+	}
+	redacted := strings.ReplaceAll(text, normalized, marker)
+	// Same %q-escaped-form pass the fallback's tier two runs below, and
+	// for the identical reason: text is normally (*url.Error).Error(),
+	// which renders with %q, so a normalized containing a backslash or
+	// double quote survives into text as two printable characters (\\ or
+	// \") that the raw ReplaceAll above cannot match. See the doc
+	// comment above for why this branch needed its own pass (F3, found
+	// 2026-09-04, third instance of this defect class).
+	redacted = replaceQuotedForm(redacted, normalized, marker)
+	if parsed.RawPath != "" {
+		rawURL := *parsed
+		rawURL.RawQuery = ""
+		rawURL.Fragment = ""
+		rawURLString := rawURL.String()
+		redacted = strings.ReplaceAll(redacted, rawURLString, marker)
+		redacted = replaceQuotedForm(redacted, rawURLString, marker)
+	}
+	return RedactWebhookSecrets(redacted)
+}
+
+func redactUnparseableWebhookURL(text, normalized string, err error) string {
 	// url.Parse could not make sense of this exact string -- callers only
 	// reach this branch redacting the *url.Error text produced when
 	// url.Parse(webhookURL) itself failed, so a second url.Parse call on the
