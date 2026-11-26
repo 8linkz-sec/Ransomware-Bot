@@ -37,7 +37,7 @@ import (
 
 // Application build metadata. Values can be overridden with -ldflags.
 var (
-	Version   = "1.2.1"
+	Version   = "1.2.2"
 	Commit    = "unknown"
 	BuildDate = "unknown"
 )

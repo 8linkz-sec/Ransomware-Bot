@@ -67,7 +67,7 @@ Updates and rollbacks are described in [Build, update and roll back](#build-upda
 | `--dry-run` | Run one cycle and log `[DRY-RUN]` previews without sending or changing status; exits 1 on a genuine API or RSS failure (an empty `api_key` with a ransomware webhook enabled counts; an RSS cycle-budget overrun or a shutdown cancel never does) |
 | `--list-dead-letter` | List terminally failed deliveries with recovery details and exit |
 | `--locale` | CLI output language, `en` or `de` (also via `BOT_LOCALE` env) |
-| `--version` | Show version information and exit, e.g. `Ransomware News Bot v1.2.1 (commit abc123, built 2026-09-05T12:00:00Z)` |
+| `--version` | Show version information and exit, e.g. `Ransomware News Bot v1.2.2 (commit abc123, built 2026-11-26T12:00:00Z)` |
 | `--help`, `-h` | Print usage to stderr and exit 0 (an unknown flag exits 2) |
 
 ## Prerequisites
