@@ -306,9 +306,9 @@ Feed URLs must be HTTPS, without credentials, sensitive query parameters or frag
 resolve to a public address. Private, loopback, link-local, CGNAT, reserved and IPv6-transition
 addresses embedding those (NAT64 `64:ff9b::/96`, 6to4 `2002::/16`, ISATAP) are refused at load time
 and again at connect time, and the prefixes whose embedded IPv4 address cannot be recovered
-unambiguously (`::/96`, `64:ff9b:1::/48`, Teredo `2001::/32`) are refused outright. Feed fetches
-are direct and ignore `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, while webhook deliveries honour
-them.
+unambiguously (`::/96`, `64:ff9b:1::/48`, Teredo `2001::/32`) are refused outright. Proxy
+handling for feeds and webhooks is described in the
+[README](readme.md#2-rss-feeds-configuration-configsconfig_feedsjson).
 
 ## Building images
 

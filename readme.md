@@ -64,7 +64,7 @@ Updates and rollbacks are described in [Build, update and roll back](#build-upda
 | `--check-config` | Validate the configuration and exit 0 (`Configuration valid`) or 1; also checks the [endpoint order](#webhook-endpoint-order) against `data_dir`, so pass the production `--data-dir` |
 | `--accept-destination-remap` | Accept a changed [endpoint order](#webhook-endpoint-order) once on a normal start; ignored by `--check-config` and `--healthcheck` |
 | `--healthcheck` | Check runtime health and exit 0 or 1; never creates `data_dir` ([what it checks](OPERATIONS.md#healthcheck)) |
-| `--dry-run` | Run one cycle and log `[DRY-RUN]` previews without sending or changing status; exits 1 on a genuine API or RSS failure |
+| `--dry-run` | Run one cycle and log `[DRY-RUN]` previews without sending or changing status; exits 1 on a genuine API or RSS failure (an empty `api_key` with a ransomware webhook enabled counts; an RSS cycle-budget overrun or a shutdown cancel never does) |
 | `--list-dead-letter` | List terminally failed deliveries with recovery details and exit |
 | `--locale` | CLI output language, `en` or `de` (also via `BOT_LOCALE` env) |
 | `--version` | Show version information and exit, e.g. `Ransomware News Bot v1.2.1 (commit abc123, built 2026-09-05T12:00:00Z)` |
@@ -505,14 +505,15 @@ Run `go run . --check-config --config-dir ./configs` before starting the bot, an
 | `data_dir` or log path errors | Create the directory and make sure the process or container UID can write to it. |
 | `quiet_hours` time or timezone errors | Use `HH:MM`, `10pm`, or `10:30 PM`, and an IANA timezone such as `Europe/Berlin`. |
 | `Could not initialize file logger; falling back to stdout-only logging` | Another bot process owns this log file; its pid and host are in `logs/bot.log.lock`. Stop the second container or process. A lock left by a crash is recovered automatically. |
-| `Data directory's filesystem does not support file locking (ENOLCK/EINVAL)` | The `data_dir` filesystem does not support file locking; put `data_dir` on a filesystem that does (on Unraid `/mnt/cache` or a disk share, not `/mnt/user`). |
-| Feeds fail with connection errors only in a proxied network | Feed fetches ignore `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` by design; the feed host must be reachable directly. |
+| `Data directory's filesystem does not support file locking (ENOLCK/EINVAL)` | A warning; the bot keeps running, but nothing then stops a second instance from writing the same `data_dir`. The `data_dir` filesystem does not support file locking; put `data_dir` on a filesystem that does (on Unraid `/mnt/cache` or a disk share, not `/mnt/user`). |
+| Feeds fail with connection errors only in a proxied network | Expected by design ([proxy handling](#2-rss-feeds-configuration-configsconfig_feedsjson)); the feed host must be reachable directly. |
 | `Destination remap detected ...` or `Healthcheck failed: destination remap pending` | The webhook endpoint order changed. Restore the previous order, or start once with `--accept-destination-remap` (see [Webhook Endpoint Order](#webhook-endpoint-order)). |
 | `Destination manifest unreadable` or `destinations.json could not be read` | `destinations.json` is corrupt or from an unknown version, so old bindings are unknown and a start with configured endpoints is refused. Restore the file from backup, or start once with `--accept-destination-remap` ([details](OPERATIONS.md#unreadable-manifests-and-manifest-versions)). |
 | `Configuration warning: webhook endpoints ... share one webhook URL` | Two endpoints for the same alert type use one URL. Intended when their filters are disjoint; otherwise give one a different filter set or remove it. |
 | Healthcheck fails after start | Check the logs for initial API/RSS errors and run `--list-dead-letter` for terminal delivery failures. |
-| `Healthcheck failed: data_dir ... does not exist` | The `data_dir` bind mount did not come up, or `--data-dir` points at the wrong path. The healthcheck never creates the directory. |
-| `Healthcheck failed: all N enabled RSS feed(s) failed ...` or `... no enabled RSS feed has succeeded since ...` | No feed succeeded within `3 x rss_poll_interval`. Check egress to the feed hosts, the error in the message, the log, and `rss_status.json`. |
+| `Healthcheck failed: data_dir ... does not exist` | The `data_dir` bind mount did not come up, or `--data-dir` points at the wrong path. `--healthcheck` and `--list-dead-letter` never create the directory; on a first run the normal start or `--check-config` creates it. |
+| `Healthcheck failed: all N enabled RSS feed(s) failed ...` | Every enabled feed failed for longer than `3 x rss_poll_interval`. Check egress from the container to the feed hosts and the error named in the message. |
+| `Healthcheck failed: no enabled RSS feed has succeeded since ...` | No feed succeeded within `3 x rss_poll_interval`, even though the feeds may report no error at all. Check whether the bot is polling, then the log and `rss_status.json`. |
 | `RSS feeds degraded: M of N ...` | Warning only; the container stays healthy. The failing feed's error is in the log and under its `last_error` in `rss_status.json`. |
 | `Healthcheck failed: RSS is enabled ... but no poll attempt has been recorded ...` | `data_dir` is not persisting RSS state; check the `/app/data` mount and that the container UID can write to it. Clears on the next successful RSS cycle. |
 | `Healthcheck failed: RSS is enabled ... exhausted its rss_check_timeout ...` | Raise `rss_check_timeout` above `rss_worker_timeout` ([details](OPERATIONS.md#rss-cycle-budget-overrun)). |
@@ -520,7 +521,7 @@ Run `go run . --check-config --config-dir ./configs` before starting the bot, an
 | Briefly `unhealthy` right after enabling RSS by hot reload or replacing the general feed list | Expected and self-healing; no action needed ([details](OPERATIONS.md#briefly-unhealthy-after-an-rss-hot-reload)). |
 | `unhealthy` after a clock step or a host suspend/resume, with nothing else changed | A false red that heals after the next completed pass or a restart; no action needed ([details](OPERATIONS.md#clock-steps-and-host-suspend)). |
 | `failed to load existing RSS status: ... unexpected end of JSON input` | A status file in `data_dir` is truncated, usually from a hard kill on an older build. Restore the `data_dir` backup, or delete the named file and accept that recent items may be re-delivered once. |
-| `Failed to load API status before API state mutation` / `Skipping API status save: api_status.json is not loaded` | `api_status.json` is corrupted, so alerts in the retention window are re-delivered every cycle. Restore the `data_dir` backup, or delete `api_status.json` and accept one round of re-delivery. |
+| `Failed to load API status before API state mutation` / `Skipping API status save: api_status.json is not loaded` | `api_status.json` is corrupted, so alerts in the retention window are re-delivered every cycle and nothing is saved to `api_status.json` until this is fixed. Restore the `data_dir` backup, or delete `api_status.json` and accept one round of re-delivery. |
 | `API rate limited; retry after ...` / API polling looks stopped | A 429 cooldown, not a hang; polling resumes on its own once the `Retry-After` deadline passes ([details](OPERATIONS.md#api-rate-limit)). |
 
 ## Platform Support
