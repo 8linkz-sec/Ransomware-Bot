@@ -5,8 +5,9 @@
 ### Security
 
 - Slack-compatible webhook error responses no longer expose configured tokens when the provider echoes a decoded URL, the request path, or the query alone.
-- The container image is built with Go 1.27.3 on Alpine 3.24.3. This fixes HIGH vulnerabilities in the Go
-  standard library (crypto/x509, crypto/tls, net/http) and in OpenSSL, musl and zlib of the old base images.
+- The container image is built with Go 1.27.4 on Alpine 3.24 and installs Alpine's current security updates on
+  every build. This fixes HIGH vulnerabilities in the Go standard library (crypto/x509, crypto/tls, net/http) and
+  in OpenSSL, musl and zlib of the old base images, plus MEDIUM ones in the Go standard library, OpenSSL and zlib.
 
 ### Improved
 
