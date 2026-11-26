@@ -754,13 +754,15 @@ RANSOMWARE_BOT_IMAGE_TAG="${RANSOMWARE_BOT_IMAGE_TAG}" docker compose run --rm r
 Use `--dry-run` for a no-send single cycle when validating a changed config or
 new feed set before enabling production webhooks.
 
-For controlled or sovereign builds, mirror the base images and Go module services, then override the build
-inputs while keeping immutable digests:
+For controlled or sovereign builds, mirror the base images, the Alpine package repositories and the Go module
+services, then override the build inputs. The defaults use the line tags `golang:1.27-alpine` and `alpine:3.24`,
+and every build runs `apk upgrade`, so a rebuild picks up current security updates; keep your mirror tags on the
+same lines:
 
 ```bash
 docker build --platform "${RANSOMWARE_BOT_PLATFORM:-linux/amd64}" \
-  --build-arg GO_BASE_IMAGE="registry.example.eu/mirror/golang:1.27-alpine@sha256:<digest>" \
-  --build-arg RUNTIME_BASE_IMAGE="registry.example.eu/mirror/alpine:3.24@sha256:<digest>" \
+  --build-arg GO_BASE_IMAGE="registry.example.eu/mirror/golang:1.27-alpine" \
+  --build-arg RUNTIME_BASE_IMAGE="registry.example.eu/mirror/alpine:3.24" \
   --build-arg ALPINE_REPOSITORY_BASE="https://apk-mirror.example.eu/alpine/v3.24" \
   --build-arg GOPROXY="https://go-proxy.example.eu,direct" \
   --build-arg GOSUMDB="sum.golang.org" \

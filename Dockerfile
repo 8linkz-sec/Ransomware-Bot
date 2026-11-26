@@ -1,6 +1,9 @@
 # Build Stage
-ARG GO_BASE_IMAGE=golang:1.27.3-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb
-ARG RUNTIME_BASE_IMAGE=alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+# Base images use the tag of their release line, never a patch tag or digest,
+# so every rebuild pulls the line's current updates; each stage also runs an
+# unpinned `apk upgrade` for Alpine security fixes the image does not carry yet.
+ARG GO_BASE_IMAGE=golang:1.27-alpine
+ARG RUNTIME_BASE_IMAGE=alpine:3.24
 FROM ${GO_BASE_IMAGE} AS builder
 
 ARG GOPROXY=https://proxy.golang.org,direct
@@ -13,6 +16,7 @@ ENV GOPROXY=${GOPROXY} \
 RUN if [ -n "${ALPINE_REPOSITORY_BASE}" ]; then \
     printf '%s\n%s\n' "${ALPINE_REPOSITORY_BASE}/main" "${ALPINE_REPOSITORY_BASE}/community" > /etc/apk/repositories; \
     fi && \
+    apk upgrade --no-cache && \
     apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /build
@@ -62,10 +66,11 @@ LABEL org.opencontainers.image.title="ransomware-news-bot" \
     org.opencontainers.image.created="${BUILD_DATE}" \
     org.opencontainers.image.source="https://github.com/8linkz-sec/Ransomware-Bot"
 
-# Install runtime dependencies
+# Install current Alpine security updates and runtime dependencies
 RUN if [ -n "${ALPINE_REPOSITORY_BASE}" ]; then \
     printf '%s\n%s\n' "${ALPINE_REPOSITORY_BASE}/main" "${ALPINE_REPOSITORY_BASE}/community" > /etc/apk/repositories; \
     fi && \
+    apk upgrade --no-cache && \
     apk add --no-cache \
     ca-certificates \
     tzdata
