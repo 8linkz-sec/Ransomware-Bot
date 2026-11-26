@@ -1189,7 +1189,7 @@ func WebhookTargetsForType(cfg *Config, webhookType string) []WebhookTargetConfi
 // own, so where their filters overlap the same alert reaches that channel once
 // per endpoint. Endpoints of one kind are fanned out to across every platform,
 // so a group may span platform blocks. Sharing a URL is allowed on purpose;
-// see readme.md.
+// see OPERATIONS.md, "Shared webhook URLs".
 type SharedWebhookURLGroup struct {
 	Kind        string   // ransomware, rss, or government
 	Host        string   // webhook host only; never the path or the token

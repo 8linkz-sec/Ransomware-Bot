@@ -716,9 +716,10 @@ func rssRecoveryItemIsStale(cfg *config.Config, item status.UnsentRSSItem) bool 
 
 // limitUnsentRSSItemsForCycle splits the per-cycle budget. Stale items are
 // skipped without a webhook call and are deliberately not marked sent
-// (readme.md: raising rss_max_item_age must still recover them), so they stay at
-// the head of the oldest-first recovery list; counting them against the send
-// budget starves every retry and quiet-hours resume until retention prunes them.
+// (OPERATIONS.md, "RSS item age limit": raising rss_max_item_age must still
+// recover them), so they stay at the head of the oldest-first recovery list;
+// counting them against the send budget starves every retry and quiet-hours
+// resume until retention prunes them.
 // Own, equally sized budget instead. The second return value keeps meaning
 // "items in the unsent set this cycle did not look at", so
 // unsent_count == send_batch_count + deferred_by_cap still holds.
