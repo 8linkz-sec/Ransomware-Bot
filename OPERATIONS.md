@@ -232,8 +232,14 @@ The points below need more than that.
 
 ### RSS item age limit
 
-`rss_max_item_age` items older than the limit are skipped for the current cycle but are not marked
-as sent, so increasing the value later can still recover them.
+A dated item is posted only while it is no older than the effective limit: the smaller of
+`rss_max_item_age` and `status_retention.rss_parsed_max_age` (default 8760h). An empty
+`rss_max_item_age` sets no limit of its own, so the limit is then `rss_parsed_max_age`. The cap
+exists because an item older than the dedup horizon would lose its sent marker to retention and
+be delivered again on a later poll.
+
+Items older than the limit are skipped for the current cycle but are not marked as sent, so
+increasing `rss_max_item_age` later can still recover them, up to the `rss_parsed_max_age` cap.
 
 Items whose publication date cannot be read are exempt from this limit by design: treating an
 unknown age as "too old" would drop every item of a feed whose date format the parser cannot read.

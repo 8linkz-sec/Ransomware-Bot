@@ -204,7 +204,7 @@ multi-channel settings:
 | `rss_worker_timeout` | Budget for one RSS feed batch (the whole worker pool); 5s-5m | `"30s"`, `"2m"` |
 | `rss_retry_count` | Failed feed retry attempts; 0-10 | `3`, `10` |
 | `rss_retry_delay` | Delay between feed retries; minimum 1s | `"2s"`, `"10s"` |
-| `rss_max_item_age` | Max age of RSS items to post; empty = off, negative rejected; skipped items stay recoverable and undated items are exempt ([details](OPERATIONS.md#rss-item-age-limit)) | `""`, `"48h"` |
+| `rss_max_item_age` | Max age of RSS items to post, capped at `status_retention.rss_parsed_max_age` (default 8760h), which also applies when this is empty; negative rejected; skipped items stay recoverable and undated items are exempt ([details](OPERATIONS.md#rss-item-age-limit)) | `""`, `"48h"` |
 | `max_api_entries_per_cycle` | Max API alerts per webhook target per cycle; 1-1000 | `100`, `250` |
 | `max_rss_entries_per_cycle` | Max RSS alerts per webhook target per cycle, including recovery backlog; 1-1000 | `100`, `250` |
 | `data_dir` | Directory for persistent status data (resolved to an absolute path) | `"./data"`, `"/opt/bot/data"` |
